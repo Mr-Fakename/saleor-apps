@@ -69,4 +69,18 @@ export class StripePaymentIntentsApi implements IStripePaymentIntentsApi {
       (error) => error,
     );
   }
+
+  async searchPaymentIntentsByCheckout(args: {
+    checkoutId: string;
+  }): Promise<Result<Stripe.PaymentIntent[], unknown>> {
+    return ResultAsync.fromPromise(
+      this.stripeApiWrapper.paymentIntents
+        .search({
+          query: `metadata['saleor_source_id']:'${args.checkoutId}' AND status:'requires_payment_method'`,
+          limit: 100,
+        })
+        .then((response) => response.data),
+      (error) => error,
+    );
+  }
 }

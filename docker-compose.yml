@@ -1,0 +1,248 @@
+# Docker Compose configuration for deploying individual Saleor apps with DynamoDB
+# Usage examples:
+#   docker-compose up stripe dynamodb-local    # Run Stripe app with DynamoDB
+#   docker-compose up cms dynamodb-local       # Run CMS app with DynamoDB
+#   docker-compose up any-app                  # Run any app (specify with APP_NAME env var)
+#   APP_NAME=avatax docker-compose up any-app  # Run specific app dynamically
+
+services:
+  # DynamoDB Local - For storing Stripe events and app configuration
+  dynamodb-local:
+    image: "amazon/dynamodb-local:latest"
+    container_name: dynamodb
+    ports:
+      - "8001:8001"
+    volumes:
+      - dynamodb-data:/home/dynamodblocal/data
+      - "./docker/dynamodb:/home/dynamodblocal/data"
+    command: "-jar DynamoDBLocal.jar -sharedDb -port 8001 -dbPath /home/dynamodblocal/data"
+    working_dir: /home/dynamodblocal
+    user: root
+
+  # DynamoDB Admin UI - Optional web interface for DynamoDB
+  dynamodb-admin:
+    image: aaronshaf/dynamodb-admin
+    container_name: dynamodb-admin
+    ports:
+      - "8001:8001"
+    environment:
+      DYNAMO_ENDPOINT: "http://dynamodb-local:8000"
+      AWS_REGION: "us-east-1"
+      AWS_ACCESS_KEY_ID: "dummy"
+      AWS_SECRET_ACCESS_KEY: "dummy"
+    depends_on:
+      - dynamodb-local
+    restart: unless-stopped
+  # Stripe Payment App
+  stripe:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+      args:
+        APP_NAME: stripe
+    image: saleor-stripe-app:latest
+    container_name: saleor-app-stripe
+    ports:
+      - "3001:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      # DynamoDB Configuration
+      - AWS_ACCESS_KEY_ID=dummy
+      - AWS_SECRET_ACCESS_KEY=dummy
+      - AWS_REGION=us-east-1
+      - AWS_ENDPOINT_URL=http://dynamodb-local:8000
+      # Add your Stripe-specific environment variables here
+      # - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      # - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+      # - SALEOR_API_URL=${SALEOR_API_URL}
+      # - SALEOR_APP_TOKEN=${SALEOR_APP_TOKEN}
+    env_file:
+      - .env.stripe  # Optional: app-specific env file
+    restart: unless-stopped
+    
+  # CMS App
+  cms:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+      args:
+        APP_NAME: cms
+    container_name: saleor-app-cms
+    ports:
+      - "3002:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      # DynamoDB Configuration
+      - AWS_ACCESS_KEY_ID=dummy
+      - AWS_SECRET_ACCESS_KEY=dummy
+      - AWS_REGION=us-east-1
+      - AWS_ENDPOINT_URL=http://dynamodb-local:8000
+      # Add your CMS-specific environment variables here
+    env_file:
+      - .env.cms  # Optional: app-specific env file
+    depends_on:
+      dynamodb-local:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  # Klaviyo App
+  klaviyo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+      args:
+        APP_NAME: klaviyo
+    container_name: saleor-app-klaviyo
+    ports:
+      - "3003:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      # Add your Klaviyo-specific environment variables here
+    env_file:
+      - .env.klaviyo  # Optional: app-specific env file
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  # Search App
+  search:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+      args:
+        APP_NAME: search
+    container_name: saleor-app-search
+    ports:
+      - "3004:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      # Add your Search-specific environment variables here
+    env_file:
+      - .env.search  # Optional: app-specific env file
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  # Generic app service - can run any app by setting APP_NAME environment variable
+  any-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+      # No APP_NAME build arg - allows runtime selection
+    container_name: saleor-app-generic
+    ports:
+      - "3005:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - APP_NAME=${APP_NAME:-stripe}  # Runtime app selection with default
+      # DynamoDB Configuration
+      - AWS_ACCESS_KEY_ID=dummy
+      - AWS_SECRET_ACCESS_KEY=dummy
+      - AWS_REGION=us-east-1
+      - AWS_ENDPOINT_URL=http://dynamodb-local:8000
+    env_file:
+      - .env.${APP_NAME:-stripe}  # Load app-specific env file
+    depends_on:
+      dynamodb-local:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  # Development service for any app
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+      args:
+        APP_NAME: ${APP_NAME:-stripe}  # Default to stripe if not specified
+    container_name: saleor-app-dev
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - CHOKIDAR_USEPOLLING=true
+      - APP_NAME=${APP_NAME:-stripe}
+      # DynamoDB Configuration
+      - AWS_ACCESS_KEY_ID=dummy
+      - AWS_SECRET_ACCESS_KEY=dummy
+      - AWS_REGION=us-east-1
+      - AWS_ENDPOINT_URL=http://dynamodb-local:8000
+    volumes:
+      # Mount source code for hot reload
+      - ./apps:/app/apps
+      - ./packages:/app/packages
+      - /app/node_modules
+      - /app/apps/${APP_NAME:-stripe}/node_modules
+    env_file:
+      - .env.development
+    depends_on:
+      dynamodb-local:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # All-in-one testing service - builds and can run any app
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+      # Builds all apps, can run any at runtime
+    container_name: saleor-app-tester
+    ports:
+      - "3006:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - APP_NAME=${APP_NAME:-stripe}
+      # Testing environment variables
+      - SECRET_KEY=test-secret-key
+      - DYNAMODB_MAIN_TABLE_NAME=test-table
+      - AWS_ACCESS_KEY_ID=dummy
+      - AWS_SECRET_ACCESS_KEY=dummy
+      - AWS_REGION=us-east-1
+      - AWS_ENDPOINT_URL=http://dynamodb-local:8000
+    depends_on:
+      dynamodb-local:
+        condition: service_healthy
+    restart: unless-stopped
+
+# Shared network for communication between apps if needed
+networks:
+  default:
+    name: saleor-apps
+    driver: bridge
+
+# Optional: Add volumes for persistent data
+volumes:
+  app_data:
+    driver: local

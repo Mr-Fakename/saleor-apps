@@ -19,6 +19,7 @@ import { StripePaymentIntentsApiFactory } from "@/modules/stripe/stripe-payment-
 import { transactionRecorder } from "@/modules/transactions-recording/repositories/transaction-recorder-impl";
 
 import { withRecipientVerification } from "../with-recipient-verification";
+import { withRequestDeduplication } from "../with-request-deduplication";
 import { TransactionInitializeSessionUseCase } from "./use-case";
 import { transactionInitializeSessionWebhookDefinition } from "./webhook-definition";
 
@@ -31,68 +32,70 @@ const useCase = new TransactionInitializeSessionUseCase({
 const logger = createLogger("TRANSACTION_INITIALIZE_SESSION route");
 
 const handler = transactionInitializeSessionWebhookDefinition.createHandler(
-  withRecipientVerification(async (_req, ctx) => {
-    try {
-      setObservabilitySourceObjectId(ctx.payload.sourceObject);
+  withRecipientVerification(
+    withRequestDeduplication(async (_req, ctx) => {
+      try {
+        setObservabilitySourceObjectId(ctx.payload.sourceObject);
 
-      loggerContext.set(
-        ObservabilityAttributes.TRANSACTION_AMOUNT,
-        ctx.payload.action.amount ?? null,
-      );
+        loggerContext.set(
+          ObservabilityAttributes.TRANSACTION_AMOUNT,
+          ctx.payload.action.amount ?? null,
+        );
 
-      logger.info("Received webhook request");
+        logger.info("Received webhook request");
 
-      const saleorApiUrlResult = createSaleorApiUrl(ctx.authData.saleorApiUrl);
+        const saleorApiUrlResult = createSaleorApiUrl(ctx.authData.saleorApiUrl);
 
-      if (saleorApiUrlResult.isErr()) {
-        captureException(saleorApiUrlResult.error);
-        const response = new MalformedRequestResponse(
+        if (saleorApiUrlResult.isErr()) {
+          captureException(saleorApiUrlResult.error);
+          const response = new MalformedRequestResponse(
+            appContextContainer.getContextValue(),
+            saleorApiUrlResult.error,
+          );
+
+          return response.getResponse();
+        }
+
+        setObservabilitySaleorApiUrl(saleorApiUrlResult.value, ctx.payload.version);
+
+        const result = await useCase.execute({
+          appId: ctx.authData.appId,
+          saleorApiUrl: saleorApiUrlResult.value,
+          event: ctx.payload,
+        });
+
+        return result.match(
+          (result) => {
+            logger.info("Successfully processed webhook request", {
+              httpsStatusCode: result.statusCode,
+              resolvedEvent: result.transactionResult.result,
+              // todo: would be good to print stripeEnv here as well, but it's not available
+            });
+
+            return result.getResponse();
+          },
+          (err) => {
+            logger.warn("Failed to process webhook request", {
+              httpsStatusCode: err.statusCode,
+              reason: err.message,
+            });
+
+            return err.getResponse();
+          },
+        );
+      } catch (error) {
+        captureException(error);
+        logger.error("Unhandled error", { error: error });
+
+        const response = new UnhandledErrorResponse(
           appContextContainer.getContextValue(),
-          saleorApiUrlResult.error,
+          BaseError.normalize(error),
         );
 
         return response.getResponse();
       }
-
-      setObservabilitySaleorApiUrl(saleorApiUrlResult.value, ctx.payload.version);
-
-      const result = await useCase.execute({
-        appId: ctx.authData.appId,
-        saleorApiUrl: saleorApiUrlResult.value,
-        event: ctx.payload,
-      });
-
-      return result.match(
-        (result) => {
-          logger.info("Successfully processed webhook request", {
-            httpsStatusCode: result.statusCode,
-            resolvedEvent: result.transactionResult.result,
-            // todo: would be good to print stripeEnv here as well, but it's not available
-          });
-
-          return result.getResponse();
-        },
-        (err) => {
-          logger.warn("Failed to process webhook request", {
-            httpsStatusCode: err.statusCode,
-            reason: err.message,
-          });
-
-          return err.getResponse();
-        },
-      );
-    } catch (error) {
-      captureException(error);
-      logger.error("Unhandled error", { error: error });
-
-      const response = new UnhandledErrorResponse(
-        appContextContainer.getContextValue(),
-        BaseError.normalize(error),
-      );
-
-      return response.getResponse();
-    }
-  }),
+    }),
+  ),
 );
 
 export const POST = compose(

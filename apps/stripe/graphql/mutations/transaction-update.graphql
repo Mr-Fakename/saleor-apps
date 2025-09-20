@@ -1,0 +1,13 @@
+mutation TransactionUpdate($transactionId: ID!, $pspReference: String!) {
+  transactionUpdate(id: $transactionId, transaction: { pspReference: $pspReference }) {
+    errors {
+      message
+      code
+      field
+    }
+    transaction {
+      id
+      pspReference
+    }
+  }
+}

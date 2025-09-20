@@ -12,6 +12,7 @@ describe("TransactionRefundRequestedUseCaseResponses", () => {
     it("getResponse() returns valid Response with status 200", async () => {
       const response = new TransactionRefundRequestedUseCaseResponses.Success({
         stripeRefundId: mockedStripeRefundId,
+        stripePaymentIntentId: mockedStripePaymentIntentId,
         appContext: {
           stripeEnv: "LIVE",
         },
@@ -21,7 +22,7 @@ describe("TransactionRefundRequestedUseCaseResponses", () => {
       expect(fetchReponse.status).toBe(200);
       expect(await fetchReponse.json()).toMatchInlineSnapshot(`
         {
-          "pspReference": "re_TEST_TEST_TEST",
+          "pspReference": "pi_TEST_TEST_TEST",
         }
       `);
     });

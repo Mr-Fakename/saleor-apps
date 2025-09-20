@@ -76,6 +76,8 @@ export default {
     "claude",
     "SEPA",
     "mailpit",
+    "curlimages",
+    "Ikhk",
   ],
   language: "en-US",
   useGitignore: true,

@@ -56,8 +56,39 @@ export class TransactionRefundRequestedUseCase {
   }): Promise<UseCaseExecuteResult> {
     const { appId, saleorApiUrl, event } = args;
 
-    const transaction = getTransactionFromRequestedEventPayload(event);
-    const channelId = getChannelIdFromRequestedEventPayload(event);
+    let transaction, channelId;
+
+    try {
+      transaction = getTransactionFromRequestedEventPayload(event);
+    } catch (error) {
+      this.logger.error("Failed to extract transaction from event", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+
+    try {
+      channelId = getChannelIdFromRequestedEventPayload(event);
+    } catch (error) {
+      this.logger.error("Failed to extract channel ID from event", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+
+    // Validate transaction has proper pspReference
+    if (!transaction.pspReference) {
+      this.logger.error("Transaction missing pspReference", {
+        transactionId: transaction.id,
+      });
+
+      return err(
+        new MalformedRequestResponse(
+          appContextContainer.getContextValue(),
+          new BaseError("Transaction missing pspReference - cannot process refund"),
+        ),
+      );
+    }
 
     loggerContext.set(ObservabilityAttributes.PSP_REFERENCE, transaction.pspReference);
 
@@ -68,8 +99,9 @@ export class TransactionRefundRequestedUseCase {
     });
 
     if (stripeConfigForThisChannel.isErr()) {
-      this.logger.error("Failed to get configuration", {
-        error: stripeConfigForThisChannel.error,
+      this.logger.error("Failed to get Stripe configuration", {
+        error: stripeConfigForThisChannel.error.message,
+        channelId,
       });
 
       return err(
@@ -81,7 +113,7 @@ export class TransactionRefundRequestedUseCase {
     }
 
     if (!stripeConfigForThisChannel.value) {
-      this.logger.warn("Config for channel not found", {
+      this.logger.warn("Stripe configuration not found for channel", {
         channelId,
       });
 
@@ -103,9 +135,10 @@ export class TransactionRefundRequestedUseCase {
       key: restrictedKey,
     });
 
-    this.logger.debug("Refunding Stripe payment intent with id", {
-      id: transaction.pspReference,
-      action: event.action,
+    this.logger.info("Processing Stripe refund", {
+      pspReference: transaction.pspReference,
+      amount: event.action.amount,
+      currency: event.action.currency,
     });
 
     const stripePaymentIntentId = createStripePaymentIntentId(transaction.pspReference);
@@ -116,8 +149,10 @@ export class TransactionRefundRequestedUseCase {
     });
 
     if (stripeMoneyResult.isErr()) {
-      this.logger.error("Failed to create Stripe money", {
-        error: stripeMoneyResult.error,
+      this.logger.error("Invalid refund amount or currency", {
+        error: stripeMoneyResult.error.message,
+        amount: event.action.amount,
+        currency: event.action.currency,
       });
 
       return err(
@@ -128,23 +163,24 @@ export class TransactionRefundRequestedUseCase {
       );
     }
 
+    const refundMetadata = {
+      saleor_source_id: transaction.checkout?.id ? transaction.checkout.id : transaction.order?.id,
+      saleor_source_type: transaction.checkout ? ("Checkout" as const) : ("Order" as const),
+      saleor_transaction_id: createSaleorTransactionId(transaction.id),
+    };
+
     const createRefundResult = await stripeRefundsApi.createRefund({
       paymentIntentId: stripePaymentIntentId,
       stripeMoney: stripeMoneyResult.value,
-      metadata: {
-        saleor_source_id: transaction.checkout?.id
-          ? transaction.checkout.id
-          : transaction.order?.id,
-        saleor_source_type: transaction.checkout ? "Checkout" : "Order",
-        saleor_transaction_id: createSaleorTransactionId(transaction.id),
-      },
+      metadata: refundMetadata,
     });
 
     if (createRefundResult.isErr()) {
       const error = mapStripeErrorToApiError(createRefundResult.error);
 
-      this.logger.error("Failed to create refund", {
-        error,
+      this.logger.error("Stripe refund creation failed", {
+        error: error.message,
+        stripePaymentIntentId,
       });
 
       return ok(
@@ -159,18 +195,14 @@ export class TransactionRefundRequestedUseCase {
 
     const refund = createRefundResult.value;
 
-    this.logger.debug("Refund created", {
-      refund,
-    });
-
     const saleorMoneyResult = SaleorMoney.createFromStripe({
       amount: refund.amount,
       currency: refund.currency,
     });
 
     if (saleorMoneyResult.isErr()) {
-      this.logger.error("Failed to create Saleor money", {
-        error: saleorMoneyResult.error,
+      this.logger.error("Failed to convert Stripe refund amount", {
+        error: saleorMoneyResult.error.message,
       });
 
       return err(
@@ -178,9 +210,16 @@ export class TransactionRefundRequestedUseCase {
       );
     }
 
+    this.logger.info("Stripe refund processed successfully", {
+      stripeRefundId: refund.id,
+      stripePaymentIntentId: stripePaymentIntentId,
+      amount: saleorMoneyResult.value.amount,
+    });
+
     return ok(
       new TransactionRefundRequestedUseCaseResponses.Success({
         stripeRefundId: createStripeRefundId(refund.id),
+        stripePaymentIntentId: stripePaymentIntentId,
         appContext: appContextContainer.getContextValue(),
       }),
     );

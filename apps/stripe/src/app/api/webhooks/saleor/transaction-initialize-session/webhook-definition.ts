@@ -16,6 +16,29 @@ export const transactionInitializeSessionWebhookDefinition =
     query: TransactionInitializeSessionDocument,
     webhookPath: "api/webhooks/saleor/transaction-initialize-session",
     verifySignatureFn: (jwks, signature, rawBody) => {
-      return verifyWebhookSignature(jwks, signature, rawBody);
+      console.log("=== WORKING WEBHOOK SIGNATURE DEBUG ===", {
+        hasJwks: !!jwks,
+        jwksType: typeof jwks,
+        jwksLength: typeof jwks === "string" ? jwks.length : "N/A",
+        jwksPreview:
+          typeof jwks === "string" ? jwks.substring(0, 200) : String(jwks).substring(0, 200),
+        hasSignature: !!signature,
+        signatureLength: signature?.length,
+        signaturePreview: signature?.substring(0, 100),
+      });
+
+      const promise = verifyWebhookSignature(jwks, signature, rawBody);
+
+      promise
+        .then(() => {
+          console.log("=== WORKING WEBHOOK: Signature verification SUCCESS ===");
+        })
+        .catch((error) => {
+          console.log("=== WORKING WEBHOOK: Signature verification FAILED ===", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+
+      return promise;
     },
   });

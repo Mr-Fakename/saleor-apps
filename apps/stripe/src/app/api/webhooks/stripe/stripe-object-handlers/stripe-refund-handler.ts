@@ -159,12 +159,16 @@ export class StripeRefundHandler {
 
     switch (event.type) {
       case "charge.refund.updated": {
+        /*
+         * FIXED: Use Payment Intent ID as pspReference for consistency, not refund ID
+         * This ensures all transaction events for the same transaction use the same pspReference
+         */
         return ok(
           new TransactionEventReportVariablesResolver({
             transactionResult: mapRefundStatusToTransactionResult(
               createStripeRefundStatus(event.data.object.status),
             ),
-            stripeObjectId: refundId,
+            stripeObjectId: stripePaymentIntentIdResult.value,
             saleorTransactionId: recordedTransactionResult.value.saleorTransactionId,
             saleorMoney,
             timestamp,

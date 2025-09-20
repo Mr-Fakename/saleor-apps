@@ -8,11 +8,16 @@ import {
   BrokenAppResponse,
   MalformedRequestResponse,
 } from "@/app/api/webhooks/saleor/saleor-webhook-responses";
-import { TransactionInitializeSessionEventFragment } from "@/generated/graphql";
+import {
+  TransactionInitializeSessionEventFragment,
+  TransactionUpdateDocument,
+} from "@/generated/graphql";
 import { appContextContainer } from "@/lib/app-context";
 import { BaseError } from "@/lib/errors";
+import { createInstrumentedGraphqlClient } from "@/lib/graphql-client";
 import { createLogger } from "@/lib/logger";
 import { loggerContext } from "@/lib/logger-context";
+import { saleorApp } from "@/lib/saleor-app";
 import { AppConfigRepo } from "@/modules/app-config/repositories/app-config-repo";
 import { ResolvedTransactionFlow } from "@/modules/resolved-transaction-flow";
 import { resolveSaleorMoneyFromStripePaymentIntent } from "@/modules/saleor/resolve-saleor-money-from-stripe-payment-intent";
@@ -158,6 +163,67 @@ export class TransactionInitializeSessionUseCase {
     return new ChargeActionRequiredResult(stripeStatus);
   }
 
+  private async updateTransactionWithPspReference(args: {
+    transactionId: string;
+    stripePaymentIntentId: StripePaymentIntentId;
+    saleorApiUrl: SaleorApiUrl;
+    appId: string;
+  }): Promise<Result<void, InstanceType<typeof BaseError>>> {
+    try {
+      // Get the app token from APL
+      const authData = await saleorApp.apl.get(args.saleorApiUrl);
+
+      if (!authData) {
+        this.logger.error("No auth data found for saleorApiUrl", {
+          saleorApiUrl: args.saleorApiUrl,
+        });
+
+        return err(new BaseError("No authentication data found"));
+      }
+
+      const client = createInstrumentedGraphqlClient({
+        saleorApiUrl: args.saleorApiUrl,
+        token: authData.token,
+      });
+
+      const result = await client.mutation(TransactionUpdateDocument, {
+        transactionId: args.transactionId,
+        pspReference: args.stripePaymentIntentId,
+      });
+
+      if (result.error || result.data?.transactionUpdate?.errors?.length) {
+        const errors = result.data?.transactionUpdate?.errors || [];
+        const errorMessage =
+          errors.map((e) => e.message).join(", ") || result.error?.message || "Unknown error";
+
+        this.logger.error("Failed to update transaction with pspReference", {
+          transactionId: args.transactionId,
+          pspReference: args.stripePaymentIntentId,
+          errors,
+          graphqlError: result.error,
+        });
+
+        return err(new BaseError(`Failed to update transaction: ${errorMessage}`));
+      }
+
+      this.logger.info("Successfully updated transaction with pspReference", {
+        transactionId: args.transactionId,
+        pspReference: args.stripePaymentIntentId,
+        updatedTransaction: result.data?.transactionUpdate?.transaction,
+      });
+
+      return ok(undefined);
+    } catch (error) {
+      this.logger.error("Exception while updating transaction with pspReference", {
+        error,
+        transactionId: args.transactionId,
+        pspReference: args.stripePaymentIntentId,
+      });
+
+      return err(BaseError.normalize(error));
+    }
+  }
+
   async execute(args: {
     appId: string;
     saleorApiUrl: SaleorApiUrl;
@@ -228,9 +294,128 @@ export class TransactionInitializeSessionUseCase {
     });
 
     const selectedPaymentMethod = resolvePaymentMethodFromEventData(eventDataResult.value);
-
     const resolvedTransactionFlow =
       selectedPaymentMethod.getResolvedTransactionFlow(saleorTransactionFlow);
+
+    // Check for existing payment intents for this checkout
+    const existingPaymentIntentsResult =
+      await stripePaymentIntentsApi.searchPaymentIntentsByCheckout({
+        checkoutId: event.sourceObject.id,
+      });
+
+    if (existingPaymentIntentsResult.isOk() && existingPaymentIntentsResult.value.length > 0) {
+      this.logger.debug("Found existing payment intents for checkout", {
+        count: existingPaymentIntentsResult.value.length,
+        paymentIntentIds: existingPaymentIntentsResult.value.map((pi) => pi.id),
+      });
+
+      const requestedAmount = StripeMoney.createFromSaleorAmount({
+        amount: event.action.amount,
+        currency: event.action.currency,
+      });
+
+      if (requestedAmount.isOk()) {
+        // Try to find a reusable payment intent with the same amount
+        const reusablePI = existingPaymentIntentsResult.value.find(
+          (pi) =>
+            pi.amount === requestedAmount.value.amount &&
+            pi.currency === requestedAmount.value.currency &&
+            pi.status === "requires_payment_method",
+        );
+
+        if (reusablePI) {
+          this.logger.debug("Reusing existing payment intent", { paymentIntentId: reusablePI.id });
+
+          const mappedResponseResult = this.mapStripePaymentIntentToWebhookResponse(reusablePI);
+
+          if (mappedResponseResult.isOk()) {
+            const [saleorMoney, stripePaymentIntentId, stripeClientSecret, stripeStatus] =
+              mappedResponseResult.value;
+
+            // Update transaction record with reused payment intent
+            const recordedTransaction = new RecordedTransaction({
+              saleorTransactionId: createSaleorTransactionId(event.transaction.id),
+              stripePaymentIntentId,
+              saleorTransactionFlow: saleorTransactionFlow,
+              resolvedTransactionFlow: resolvedTransactionFlow,
+              selectedPaymentMethod: selectedPaymentMethod.type,
+            });
+
+            const recordResult = await this.transactionRecorder.recordTransaction(
+              {
+                saleorApiUrl: args.saleorApiUrl,
+                appId: args.appId,
+              },
+              recordedTransaction,
+            );
+
+            if (recordResult.isOk()) {
+              this.logger.info("Reused existing payment intent", {
+                paymentIntentId: reusablePI.id,
+                transaction: recordedTransaction,
+              });
+
+              // Update Saleor transaction with the Stripe PaymentIntent ID as pspReference
+              const updateTransactionResult = await this.updateTransactionWithPspReference({
+                transactionId: event.transaction.id,
+                stripePaymentIntentId,
+                saleorApiUrl: args.saleorApiUrl,
+                appId: args.appId,
+              });
+
+              if (updateTransactionResult.isErr()) {
+                this.logger.error("Failed to update transaction with pspReference (reused PI)", {
+                  error: updateTransactionResult.error,
+                  transactionId: event.transaction.id,
+                  pspReference: stripePaymentIntentId,
+                });
+
+                // FIXED: Return error instead of continuing - pspReference must be set
+                return err(
+                  new BrokenAppResponse(
+                    appContextContainer.getContextValue(),
+                    updateTransactionResult.error,
+                  ),
+                );
+              }
+
+              const transactionResult = this.resolveOkTransactionResult({
+                transactionFlow: resolvedTransactionFlow,
+                stripeStatus,
+              });
+
+              return ok(
+                new TransactionInitializeSessionUseCaseResponses.Success({
+                  saleorMoney,
+                  stripePaymentIntentId,
+                  transactionResult,
+                  stripeClientSecret,
+                  appContext: appContextContainer.getContextValue(),
+                }),
+              );
+            }
+          }
+        }
+
+        // Cancel all existing payment intents if we can't reuse any
+        for (const existingPI of existingPaymentIntentsResult.value) {
+          const cancelResult = await stripePaymentIntentsApi.cancelPaymentIntent({
+            id: existingPI.id as StripePaymentIntentId,
+          });
+
+          if (cancelResult.isOk()) {
+            this.logger.debug("Canceled existing payment intent", {
+              paymentIntentId: existingPI.id,
+            });
+          } else {
+            this.logger.warn("Failed to cancel existing payment intent", {
+              paymentIntentId: existingPI.id,
+              error: cancelResult.error,
+            });
+          }
+        }
+      }
+    }
 
     const stripePaymentIntentParamsResult = this.prepareStripeCreatePaymentIntentParams({
       eventData: eventDataResult.value,
@@ -318,6 +503,31 @@ export class TransactionInitializeSessionUseCase {
     this.logger.info("Wrote Transaction to DynamoDB", {
       transaction: recordedTransaction,
     });
+
+    /*
+     * Update Saleor transaction with the Stripe PaymentIntent ID as pspReference
+     * FIXED: Make this operation blocking - if it fails, the whole operation should fail
+     * This ensures pspReference is properly set before the webhook returns success
+     */
+    const updateTransactionResult = await this.updateTransactionWithPspReference({
+      transactionId: event.transaction.id,
+      stripePaymentIntentId,
+      saleorApiUrl: args.saleorApiUrl,
+      appId: args.appId,
+    });
+
+    if (updateTransactionResult.isErr()) {
+      this.logger.error("Failed to update transaction with pspReference", {
+        error: updateTransactionResult.error,
+        transactionId: event.transaction.id,
+        pspReference: stripePaymentIntentId,
+      });
+
+      // Return error instead of continuing - pspReference must be set
+      return err(
+        new BrokenAppResponse(appContextContainer.getContextValue(), updateTransactionResult.error),
+      );
+    }
 
     const transactionResult = this.resolveOkTransactionResult({
       transactionFlow: resolvedTransactionFlow,

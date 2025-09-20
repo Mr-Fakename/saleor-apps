@@ -91,7 +91,6 @@ describe("DynamodbAppConfigRepo", () => {
       ];
 
       // In dynamo field must be just deleted, not null, not undefined
-      // eslint-disable-next-line
       delete (mappingItems[2] as any).configId;
 
       mockDocumentClient

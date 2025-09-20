@@ -6,11 +6,13 @@ import { SaleorApp } from "@saleor/app-sdk/saleor-app";
 import { dynamoMainTable } from "@/modules/dynamodb/dynamo-main-table";
 
 import { env } from "./env";
+import { HttpsEnforcingAPL } from "./https-enforcing-apl";
 
-export let apl: APL;
+let baseApl: APL;
+
 switch (env.APL) {
   case "dynamodb": {
-    apl = DynamoAPL.create({
+    baseApl = DynamoAPL.create({
       table: dynamoMainTable,
     });
 
@@ -18,10 +20,13 @@ switch (env.APL) {
   }
 
   default: {
-    apl = new FileAPL();
+    baseApl = new FileAPL();
     break;
   }
 }
+
+// Wrap the base APL with HTTPS enforcement
+export const apl = new HttpsEnforcingAPL(baseApl);
 
 export const saleorApp = new SaleorApp({
   apl,
