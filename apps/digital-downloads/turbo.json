@@ -8,17 +8,22 @@
         "APL",
         "APP_API_BASE_URL",
         "APP_IFRAME_BASE_URL",
-        "DIGITAL_DOWNLOADS_APP_URL",
+        "MANIFEST_APP_ID",
+        "MANIFEST_APP_ID",
         "NEXT_PUBLIC_SENTRY_DSN",
-        "REST_APL_ENDPOINT",
-        "REST_APL_TOKEN",
         "SECRET_KEY",
         "SENTRY_AUTH_TOKEN",
         "SENTRY_PROJECT",
+        "STRIPE_PARTNER_ID",
+        "DYNAMODB_MAIN_TABLE_NAME",
+        "AWS_SECRET_ACCESS_KEY",
         "AWS_ACCESS_KEY_ID",
         "AWS_REGION",
-        "AWS_SECRET_ACCESS_KEY",
-        "DYNAMODB_MAIN_TABLE_NAME"
+        "INTEGRATION_DYNAMO_TABLE_NAME",
+        "INTEGRATION_DYNAMO_REGION",
+        "INTEGRATION_DYNAMO_ENDPOINT",
+        "APPSTORE_URL",
+        "APP_NAME"
       ]
     }
   }

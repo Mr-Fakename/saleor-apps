@@ -1,0 +1,78 @@
+subscription OrderFullyPaid {
+  event {
+    ... on OrderFullyPaid {
+      order {
+        id
+        number
+        created
+        user {
+          id
+          email
+          firstName
+          lastName
+        }
+        lines {
+          id
+          productName
+          variantName
+          variant {
+            id
+            name
+            product {
+              id
+              name
+              metadata {
+                key
+                value
+              }
+              productType {
+                id
+                name
+                isDigital
+              }
+              media {
+                url
+                alt
+                type
+              }
+            }
+            metadata {
+              key
+              value
+            }
+            media {
+              url
+              alt
+              type
+            }
+            attributes {
+              attribute {
+                id
+                name
+                slug
+              }
+              values {
+                id
+                name
+                slug
+                file {
+                  url
+                  contentType
+                }
+              }
+            }
+          }
+          totalPrice {
+            gross {
+              amount
+              currency
+            }
+          }
+        }
+      }
+      recipient {
+        id
+      }
+    }
+  }
+}
