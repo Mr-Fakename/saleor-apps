@@ -11,6 +11,7 @@ import {
 } from "../../../../generated/graphql";
 import { createLogger } from "../../../logger";
 import { loggerContext } from "../../../logger-context";
+import { getDownloadTokenFetcher } from "../../../modules/digital-downloads/download-token-fetcher";
 import { SendEventMessagesUseCase } from "../../../modules/event-handlers/use-case/send-event-messages.use-case";
 import { SendEventMessagesUseCaseFactory } from "../../../modules/event-handlers/use-case/send-event-messages.use-case.factory";
 import { saleorApp } from "../../../saleor-app";
@@ -79,11 +80,44 @@ const handler: NextJsWebhookHandler<OrderFullyPaidWebhookPayloadFragment> = asyn
   const useCase = useCaseFactory.createFromAuthData(authData);
 
   try {
+    // Fetch download tokens from the digital-downloads app's DynamoDB table
+    const downloadTokenFetcher = getDownloadTokenFetcher();
+    const downloadTokensResult = await downloadTokenFetcher.fetchDownloadTokensByOrderId(order.id);
+
+    let downloadLinks: Array<{
+      productName: string;
+      variantName?: string;
+      downloadUrl: string;
+      expiresAt: string;
+    }> = [];
+
+    if (downloadTokensResult.isOk()) {
+      downloadLinks = downloadTokensResult.value.map((token) => ({
+        productName: token.productName,
+        variantName: token.variantName,
+        downloadUrl: token.downloadUrl,
+        expiresAt: token.expiresAt,
+      }));
+
+      logger.info("Fetched download links for order", {
+        orderId: order.id,
+        downloadLinksCount: downloadLinks.length,
+      });
+    } else {
+      logger.warn("Failed to fetch download links, continuing without them", {
+        orderId: order.id,
+        error: downloadTokensResult.error,
+      });
+    }
+
     return useCase
       .sendEventMessages({
         channelSlug: channel,
         event: "ORDER_FULLY_PAID",
-        payload: { order: payload.order },
+        payload: {
+          order: payload.order,
+          downloadLinks, // Add download links to the payload
+        },
         recipientEmail,
       })
       .then((result) =>

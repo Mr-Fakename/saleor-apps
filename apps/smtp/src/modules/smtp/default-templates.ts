@@ -170,7 +170,36 @@ const defaultOrderFullyPaidMjmlTemplate = `<mjml>
       </mj-column>
     </mj-section>
     ${addressSection}
-    ${orderLinesSection}  
+    ${orderLinesSection}
+    {{#if downloadLinks}}
+      {{#if (gt downloadLinks.length 0)}}
+        <mj-section background-color="#f0f9ff">
+          <mj-column>
+            <mj-text font-size="18px" font-weight="bold" padding-bottom="10px">
+              Your Digital Downloads
+            </mj-text>
+            <mj-text>
+              Click the links below to download your digital products. These links will expire on the date shown.
+            </mj-text>
+          </mj-column>
+        </mj-section>
+        {{#each downloadLinks}}
+          <mj-section background-color="#ffffff" padding="10px">
+            <mj-column>
+              <mj-text font-weight="bold" padding-bottom="5px">
+                {{ this.productName }}{{#if this.variantName}} - {{ this.variantName }}{{/if}}
+              </mj-text>
+              <mj-button href="{{ this.downloadUrl }}" background-color="#3b82f6" color="white" font-size="14px" padding="10px 0">
+                Download Now
+              </mj-button>
+              <mj-text font-size="12px" color="#6b7280" padding-top="5px">
+                Expires: {{ this.expiresAt }}
+              </mj-text>
+            </mj-column>
+          </mj-section>
+        {{/each}}
+      {{/if}}
+    {{/if}}
   </mj-body>
 </mjml>`;
 
