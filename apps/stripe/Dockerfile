@@ -44,6 +44,7 @@ USER nextjs
 COPY --from=installer --chown=nextjs:nodejs /app/apps/stripe/.next/standalone ./
 COPY --from=installer --chown=nextjs:nodejs /app/apps/stripe/.next/static ./apps/stripe/.next/static
 COPY --from=installer --chown=nextjs:nodejs /app/apps/stripe/public ./apps/stripe/public
+COPY --from=installer --chown=nextjs:nodejs /app/apps/stripe/scripts/setup-dynamodb.js ./apps/stripe/scripts/setup-dynamodb.js
 
 EXPOSE 3000
 ENV PORT=3000

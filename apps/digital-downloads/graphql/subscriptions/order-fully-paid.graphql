@@ -5,6 +5,7 @@ subscription OrderFullyPaid {
         id
         number
         created
+        userEmail
         user {
           id
           email
@@ -28,7 +29,26 @@ subscription OrderFullyPaid {
               productType {
                 id
                 name
-                isDigital
+                metadata {
+                  key
+                  value
+                }
+              }
+              attributes {
+                attribute {
+                  id
+                  name
+                  slug
+                }
+                values {
+                  id
+                  name
+                  slug
+                  file {
+                    url
+                    contentType
+                  }
+                }
               }
               media {
                 url

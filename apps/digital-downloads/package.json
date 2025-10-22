@@ -19,6 +19,7 @@
     "migrate": "pnpm tsx --env-file-if-exists=.env ./scripts/run-webhooks-migration.ts",
     "migrate:dry-run": "pnpm tsx --env-file-if-exists=.env ./scripts/run-webhooks-migration.ts --dry-run",
     "setup-dynamodb": "tsx --env-file-if-exists=.env ./scripts/setup-dynamodb.ts",
+    "setup-dynamodb:prod": "node ./scripts/setup-dynamodb.js",
     "setup-dynamodb:standalone": "node --env-file-if-exists=.env ./scripts/setup-dynamodb-standalone.mjs",
     "start": "next start",
     "test": "pnpm run test:unit",

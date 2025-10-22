@@ -14,7 +14,7 @@ export function generateOrderConfirmationEmail(input: OrderConfirmationTemplateI
 } {
   const { orderNumber, customerEmail, downloadTokens, appBaseUrl } = input;
 
-  const subject = `Order ${orderNumber} Confirmed - Your Digital Downloads`;
+  const subject = `Your Sonic Drive Studio Downloads Are Ready! (Order ${orderNumber})`;
 
   const html = `
 <!DOCTYPE html>
@@ -22,12 +22,12 @@ export function generateOrderConfirmationEmail(input: OrderConfirmationTemplateI
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Order Confirmation</title>
+    <title>Your Digital Downloads - Sonic Drive Studio</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             line-height: 1.6;
-            color: #333;
+            color: #1a1a1a;
             max-width: 600px;
             margin: 0 auto;
             padding: 20px;
@@ -36,106 +36,161 @@ export function generateOrderConfirmationEmail(input: OrderConfirmationTemplateI
         .container {
             background-color: #ffffff;
             border-radius: 8px;
-            padding: 32px;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            padding: 40px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
         }
         .header {
-            border-bottom: 2px solid #f0f0f0;
-            padding-bottom: 20px;
-            margin-bottom: 30px;
+            text-align: center;
+            border-bottom: 3px solid #dc2626;
+            padding-bottom: 24px;
+            margin-bottom: 32px;
+        }
+        .brand {
+            color: #dc2626;
+            font-size: 28px;
+            font-weight: 700;
+            margin: 0 0 8px 0;
+            letter-spacing: -0.5px;
         }
         h1 {
             color: #1a1a1a;
-            font-size: 24px;
-            margin: 0 0 8px 0;
+            font-size: 22px;
+            font-weight: 600;
+            margin: 12px 0 0 0;
         }
         .order-number {
-            color: #666;
+            color: #6b7280;
             font-size: 14px;
+            margin-top: 8px;
+        }
+        .message {
+            background-color: #fafafa;
+            border-left: 4px solid #dc2626;
+            padding: 20px 24px;
+            margin: 24px 0;
+            border-radius: 4px;
+            color: #374151;
+            font-size: 15px;
+            line-height: 1.7;
         }
         .downloads-section {
-            margin: 30px 0;
+            margin: 32px 0;
         }
         .downloads-header {
             font-size: 18px;
             font-weight: 600;
             color: #1a1a1a;
-            margin-bottom: 16px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+        }
+        .downloads-header::before {
+            content: "📥";
+            margin-right: 8px;
+            font-size: 20px;
         }
         .download-item {
-            background-color: #f8f9fa;
-            border: 1px solid #e9ecef;
-            border-radius: 6px;
-            padding: 16px;
-            margin-bottom: 12px;
+            background-color: #ffffff;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 16px;
+            transition: border-color 0.2s;
+        }
+        .download-item:hover {
+            border-color: #dc2626;
         }
         .product-name {
             font-weight: 600;
             color: #1a1a1a;
-            margin-bottom: 4px;
+            font-size: 16px;
+            margin-bottom: 6px;
         }
         .variant-name {
-            color: #666;
+            color: #6b7280;
             font-size: 14px;
-            margin-bottom: 12px;
+            margin-bottom: 16px;
         }
         .download-button {
             display: inline-block;
-            background-color: #0066cc;
+            background-color: #dc2626;
             color: #ffffff !important;
             text-decoration: none;
-            padding: 10px 20px;
-            border-radius: 4px;
-            font-weight: 500;
+            padding: 12px 28px;
+            border-radius: 6px;
+            font-weight: 600;
             font-size: 14px;
             transition: background-color 0.2s;
         }
         .download-button:hover {
-            background-color: #0052a3;
+            background-color: #b91c1c;
         }
         .expiry-info {
-            color: #666;
+            color: #6b7280;
             font-size: 13px;
-            margin-top: 8px;
+            margin-top: 12px;
         }
         .info-box {
-            background-color: #e3f2fd;
-            border-left: 4px solid #2196f3;
-            padding: 16px;
-            margin: 20px 0;
+            background-color: #fef2f2;
+            border: 1px solid #fecaca;
+            border-left: 4px solid #dc2626;
+            padding: 16px 20px;
+            margin: 24px 0;
             border-radius: 4px;
         }
         .info-box p {
             margin: 0;
-            color: #1565c0;
+            color: #991b1b;
             font-size: 14px;
+            line-height: 1.6;
+        }
+        .signature {
+            margin-top: 32px;
+            padding: 24px;
+            background-color: #fafafa;
+            border-radius: 8px;
+            font-size: 15px;
+            line-height: 1.8;
+            color: #374151;
+        }
+        .signature-name {
+            font-weight: 600;
+            color: #1a1a1a;
+            margin-top: 16px;
+        }
+        .signature-brand {
+            color: #dc2626;
+            font-weight: 600;
         }
         .footer {
             margin-top: 40px;
-            padding-top: 20px;
-            border-top: 2px solid #f0f0f0;
+            padding-top: 24px;
+            border-top: 2px solid #e5e7eb;
             text-align: center;
-            color: #666;
+            color: #6b7280;
             font-size: 13px;
         }
         .help-text {
-            margin-top: 16px;
-            color: #999;
+            margin-top: 12px;
+            color: #9ca3af;
         }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>✅ Order Confirmed!</h1>
+            <div class="brand">SONIC DRIVE STUDIO</div>
+            <h1>Your Digital Downloads Are Ready!</h1>
             <p class="order-number">Order #${orderNumber}</p>
         </div>
 
-        <p>Hi there,</p>
-        <p>Thank you for your order! Your payment has been confirmed and your digital products are ready to download.</p>
+        <div class="message">
+            <p>Thank you so much for buying these products. I hope you enjoy them as much as I've been enjoying them! Be sure to follow Sonic Drive Studio social accounts so that you can stay up to date on all my upcoming releases. There's a LOT of cool stuff coming!</p>
+            <p style="margin-top: 12px;">And of course if you like them it would be great if you could tell your friends, that would help a lot! :)</p>
+        </div>
 
         <div class="downloads-section">
-            <div class="downloads-header">📥 Your Digital Downloads</div>
+            <div class="downloads-header">Your Digital Downloads</div>
 
             ${downloadTokens
               .map(
@@ -166,13 +221,19 @@ export function generateOrderConfirmationEmail(input: OrderConfirmationTemplateI
         </div>
 
         <div class="info-box">
-            <p>💡 <strong>Important:</strong> Download links expire after ${Math.round(
+            <p><strong>⏰ Important:</strong> Download links expire after ${Math.round(
               (new Date(downloadTokens[0].expiresAt).getTime() - Date.now()) / (1000 * 60 * 60),
             )} hours. Make sure to download your files before they expire!</p>
         </div>
 
+        <div class="signature">
+            <p>Cheers,</p>
+            <p class="signature-name">Jon</p>
+            <p class="signature-brand">Sonic Drive Studio</p>
+        </div>
+
         <div class="footer">
-            <p>If you have any questions or issues downloading your files, please contact our support team.</p>
+            <p>If you have any questions or issues downloading your files, please reach out!</p>
             <p class="help-text">This email was sent to ${customerEmail}</p>
         </div>
     </div>
@@ -181,19 +242,27 @@ export function generateOrderConfirmationEmail(input: OrderConfirmationTemplateI
   `.trim();
 
   const text = `
-ORDER CONFIRMED - Order #${orderNumber}
+═══════════════════════════════════════════════════
+SONIC DRIVE STUDIO
+Your Digital Downloads Are Ready!
+Order #${orderNumber}
+═══════════════════════════════════════════════════
 
-Hi there,
+Thank you so much for buying these products. I hope you enjoy them as much as I've been enjoying them! Be sure to follow Sonic Drive Studio social accounts so that you can stay up to date on all my upcoming releases. There's a LOT of cool stuff coming!
 
-Thank you for your order! Your payment has been confirmed and your digital products are ready to download.
+And of course if you like them it would be great if you could tell your friends, that would help a lot! :)
 
 YOUR DIGITAL DOWNLOADS:
+═══════════════════════════════════════════════════
 
 ${downloadTokens
   .map(
     (token, index) => `
 ${index + 1}. ${token.productName}${token.variantName ? ` - ${token.variantName}` : ""}
-   Download: ${appBaseUrl}/api/downloads/${token.token}
+
+   Download Link:
+   ${appBaseUrl}/api/downloads/${token.token}
+
    Valid until: ${new Date(token.expiresAt).toLocaleDateString("en-US", {
      year: "numeric",
      month: "long",
@@ -206,12 +275,20 @@ ${index + 1}. ${token.productName}${token.variantName ? ` - ${token.variantName}
   )
   .join("\n")}
 
-IMPORTANT: Download links expire after ${Math.round(
+═══════════════════════════════════════════════════
+⏰ IMPORTANT: Download links expire after ${Math.round(
     (new Date(downloadTokens[0].expiresAt).getTime() - Date.now()) / (1000 * 60 * 60),
-  )} hours. Make sure to download your files before they expire!
+  )} hours.
+Make sure to download your files before they expire!
+═══════════════════════════════════════════════════
 
-If you have any questions or issues downloading your files, please contact our support team.
+Cheers,
 
+Jon
+Sonic Drive Studio
+
+---
+If you have any questions or issues downloading your files, please reach out!
 This email was sent to ${customerEmail}
   `.trim();
 

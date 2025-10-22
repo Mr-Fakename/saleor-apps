@@ -1,5 +1,4 @@
-# docker build -f apps/digital-downloads/Dockerfile -t digital-downloads-app:latest .
-# docker tag digital-downloads-app:latest mrfakename/digital-downloads-app:latest
+# docker build -f apps/digital-downloads/Dockerfile -t mrfakename/digital-downloads-app:latest .
 # docker push mrfakename/digital-downloads-app:latest
 
 FROM node:22-alpine AS base
@@ -51,6 +50,7 @@ USER nextjs
 COPY --from=installer --chown=nextjs:nodejs /app/apps/digital-downloads/.next/standalone ./
 COPY --from=installer --chown=nextjs:nodejs /app/apps/digital-downloads/.next/static ./apps/digital-downloads/.next/static
 COPY --from=installer --chown=nextjs:nodejs /app/apps/digital-downloads/public ./apps/digital-downloads/public
+COPY --from=installer --chown=nextjs:nodejs /app/apps/digital-downloads/scripts/setup-dynamodb.js ./apps/digital-downloads/scripts/setup-dynamodb.js
 
 EXPOSE 3003
 ENV PORT=3003

@@ -45,63 +45,87 @@ export interface OrderFullyPaidUseCaseOutput {
 /**
  * Checks if a product/variant is a digital product
  *
- * Priority order:
- * 1. Product Type's isDigital flag (most reliable)
- * 2. Product metadata with key "digital_download"
- * 3. Variant metadata with key "digital_download"
+ * A product is considered digital if its productType has metadata
+ * with key "digital_download" and value "true"
  *
- * This prevents regular products with images from being treated as digital products
+ * This prevents regular products from being treated as digital products
  */
 function hasDigitalFiles(line: any): boolean {
   const product = line?.variant?.product;
 
-  // Check 1: Product Type isDigital flag
-  if (product?.productType?.isDigital === true) {
-    return true;
-  }
-
-  // Check 2: Product metadata
-  const productMetadata = product?.metadata || [];
-  const hasProductDigitalFlag = productMetadata.some(
+  // Check Product Type metadata for digital_download flag
+  const productTypeMetadata = product?.productType?.metadata || [];
+  const hasDigitalFlag = productTypeMetadata.some(
     (meta: any) => meta.key === "digital_download" && meta.value === "true",
   );
 
-  if (hasProductDigitalFlag) {
-    return true;
-  }
-
-  // Check 3: Variant metadata
-  const variantMetadata = line?.variant?.metadata || [];
-  const hasVariantDigitalFlag = variantMetadata.some(
-    (meta: any) => meta.key === "digital_download" && meta.value === "true",
-  );
-
-  return hasVariantDigitalFlag;
+  return hasDigitalFlag;
 }
 
 /**
  * Extracts the file URL from a line item
- * Priority: variant attributes with files > variant media > product media
+ *
+ * Looks for attributes with file-related names (Files, File, Download, etc.)
+ * Priority: variant attributes > product attributes > variant media > product media
  */
 function getFileUrl(line: any): string | null {
+  // File-related attribute names to look for (case-insensitive)
+  const fileAttributeNames = [
+    "file",
+    "files",
+    "download",
+    "downloads",
+    "attachment",
+    "attachments",
+  ];
+
+  /**
+   * Helper to check if an attribute name matches file-related patterns
+   */
+  const isFileAttribute = (attributeName: string): boolean => {
+    const lowerName = attributeName.toLowerCase();
+    return fileAttributeNames.some((pattern) => lowerName.includes(pattern));
+  };
+
   // Check 1: Variant attributes with file values (highest priority)
   const variantAttributes = line?.variant?.attributes || [];
   for (const attr of variantAttributes) {
-    const values = attr?.values || [];
-    for (const value of values) {
-      if (value?.file?.url) {
-        return value.file.url;
+    const attributeName = attr?.attribute?.name || "";
+
+    // Only check attributes with file-related names
+    if (isFileAttribute(attributeName)) {
+      const values = attr?.values || [];
+      for (const value of values) {
+        if (value?.file?.url) {
+          return value.file.url;
+        }
       }
     }
   }
 
-  // Check 2: Variant media
+  // Check 2: Product attributes with file values
+  const productAttributes = line?.variant?.product?.attributes || [];
+  for (const attr of productAttributes) {
+    const attributeName = attr?.attribute?.name || "";
+
+    // Only check attributes with file-related names
+    if (isFileAttribute(attributeName)) {
+      const values = attr?.values || [];
+      for (const value of values) {
+        if (value?.file?.url) {
+          return value.file.url;
+        }
+      }
+    }
+  }
+
+  // Check 3: Variant media
   const variantMedia = line?.variant?.media || [];
   if (variantMedia.length > 0) {
     return variantMedia[0]?.url || null;
   }
 
-  // Check 3: Product media (lowest priority)
+  // Check 4: Product media (lowest priority)
   const productMedia = line?.variant?.product?.media || [];
   if (productMedia.length > 0) {
     return productMedia[0]?.url || null;
@@ -142,7 +166,7 @@ export class OrderFullyPaidUseCase {
         },
       );
 
-      // Debug: Log all order lines and their media
+      // Debug: Log all order lines and their metadata
       order.lines.forEach((line, index) => {
         logger.debug("Order line details", {
           lineIndex: index,
@@ -151,9 +175,10 @@ export class OrderFullyPaidUseCase {
           variantName: line.variantName,
           variantId: line.variant?.id,
           productId: line.variant?.product?.id,
-          productTypeIsDigital: line.variant?.product?.productType?.isDigital,
           productTypeName: line.variant?.product?.productType?.name,
+          productTypeMetadata: line.variant?.product?.productType?.metadata,
           productMetadata: line.variant?.product?.metadata,
+          productAttributes: line.variant?.product?.attributes,
           variantMetadata: line.variant?.metadata,
           variantAttributes: line.variant?.attributes,
           variantMediaCount: line.variant?.media?.length || 0,
@@ -214,7 +239,7 @@ export class OrderFullyPaidUseCase {
           orderId: order.id,
           orderNumber: order.number,
           customerId: order.user?.id,
-          customerEmail: order.user?.email || undefined,
+          customerEmail: order.user?.email || order.userEmail || undefined,
           fileUrl: fileUrl,
           productName: line.productName,
           variantName: line.variantName || undefined,
@@ -247,6 +272,7 @@ export class OrderFullyPaidUseCase {
         });
 
         // Log download URL to console for easy testing
+        const displayEmail = order.user?.email || order.userEmail || "Guest";
         console.log("\n╔═══════════════════════════════════════════════════════════════════");
         console.log("║ 🔗 DOWNLOAD LINK CREATED");
         console.log("╠═══════════════════════════════════════════════════════════════════");
@@ -255,7 +281,7 @@ export class OrderFullyPaidUseCase {
           console.log(`║ Variant: ${line.variantName}`);
         }
         console.log(`║ Order: ${order.number}`);
-        console.log(`║ Customer: ${order.user?.email || "Guest"}`);
+        console.log(`║ Customer: ${displayEmail}`);
         console.log("╠═══════════════════════════════════════════════════════════════════");
         console.log(`║ 📥 Download URL:`);
         console.log(`║ ${downloadUrl}`);
@@ -282,23 +308,24 @@ export class OrderFullyPaidUseCase {
       });
 
       // Send order confirmation email with download links
-      if (order.user?.email && env.EMAIL_ENABLED) {
+      const customerEmail = order.user?.email || order.userEmail;
+      if (customerEmail && env.EMAIL_ENABLED) {
         logger.info("Sending order confirmation email", {
           orderId: order.id,
-          customerEmail: order.user.email,
+          customerEmail: customerEmail,
           tokensCount: tokens.length,
         });
 
         const appBaseUrl = env.APP_API_BASE_URL || "http://localhost:3003";
         const emailTemplate = generateOrderConfirmationEmail({
           orderNumber: order.number,
-          customerEmail: order.user.email,
+          customerEmail: customerEmail,
           downloadTokens: tokens,
           appBaseUrl: appBaseUrl,
         });
 
         const emailResult = await emailSender.sendEmail({
-          to: order.user.email,
+          to: customerEmail,
           subject: emailTemplate.subject,
           html: emailTemplate.html,
           text: emailTemplate.text,
@@ -307,7 +334,7 @@ export class OrderFullyPaidUseCase {
         if (emailResult.isErr()) {
           logger.error("Failed to send order confirmation email", {
             orderId: order.id,
-            customerEmail: order.user.email,
+            customerEmail: customerEmail,
             error: emailResult.error,
           });
           // Don't fail the whole webhook - tokens were created successfully
@@ -315,11 +342,11 @@ export class OrderFullyPaidUseCase {
         } else {
           logger.info("Order confirmation email sent successfully", {
             orderId: order.id,
-            customerEmail: order.user.email,
+            customerEmail: customerEmail,
           });
         }
       } else {
-        if (!order.user?.email) {
+        if (!customerEmail) {
           logger.warn("Cannot send email - no customer email found", {
             orderId: order.id,
           });
