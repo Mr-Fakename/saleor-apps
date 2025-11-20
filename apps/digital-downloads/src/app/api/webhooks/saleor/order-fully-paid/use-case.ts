@@ -13,6 +13,10 @@ import { generateDownloadToken } from "@/modules/token-generator/generate-downlo
 import { OrderFullyPaidEventFragment } from "@/app/api/webhooks/saleor/order-fully-paid/webhook-definition";
 import { emailSender } from "@/modules/email/email-sender";
 import { generateOrderConfirmationEmail } from "@/modules/email/order-confirmation-template";
+import {
+  generateCortexAdminNotificationEmail,
+  type CortexPurchaseInfo,
+} from "@/modules/email/cortex-admin-notification-template";
 
 const logger = createLogger("OrderFullyPaidUseCase");
 
@@ -60,6 +64,30 @@ function hasDigitalFiles(line: any): boolean {
   );
 
   return hasDigitalFlag;
+}
+
+/**
+ * Checks if a product/variant has the Platform attribute set to "Cortex"
+ *
+ * Looks for the "Platform" attribute in variant attributes, and checks if any value is "Cortex"
+ */
+function isCortexPlatform(line: any): boolean {
+  // Check variant attributes for Platform=Cortex
+  const variantAttributes = line?.variant?.attributes || [];
+  for (const attr of variantAttributes) {
+    const attributeName = attr?.attribute?.name || "";
+
+    if (attributeName.toLowerCase() === "platform") {
+      const values = attr?.values || [];
+      for (const value of values) {
+        if (value?.name?.toLowerCase() === "cortex") {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
 }
 
 /**
@@ -355,6 +383,76 @@ export class OrderFullyPaidUseCase {
             orderId: order.id,
           });
         }
+      }
+
+      // Check if any products are Cortex platform products
+      const cortexLines = order.lines.filter((line) => isCortexPlatform(line));
+
+      if (cortexLines.length > 0 && env.ADMIN_EMAIL && env.EMAIL_ENABLED) {
+        logger.info("Cortex products detected, sending admin notification", {
+          orderId: order.id,
+          cortexProductsCount: cortexLines.length,
+          adminEmail: env.ADMIN_EMAIL,
+        });
+
+        // Extract Cortex username and follow confirmation from order metadata
+        const orderMetadata = order.metadata || [];
+        const cortexUsername = orderMetadata.find((m: any) => m.key === "cortexCloudUsername")
+          ?.value;
+        const cortexFollowConfirmed =
+          orderMetadata.find((m: any) => m.key === "cortexFollowConfirmed")?.value === "true";
+
+        // Prepare Cortex products info
+        const cortexProducts: CortexPurchaseInfo[] = cortexLines.map((line) => ({
+          productName: line.productName,
+          variantName: line.variantName || undefined,
+          price: line.totalPrice?.gross
+            ? {
+                amount: line.totalPrice.gross.amount,
+                currency: line.totalPrice.gross.currency,
+              }
+            : undefined,
+        }));
+
+        // Generate admin notification email
+        const adminEmailTemplate = generateCortexAdminNotificationEmail({
+          orderNumber: order.number,
+          customerEmail: customerEmail || order.userEmail || "Unknown",
+          cortexUsername,
+          cortexFollowConfirmed: cortexUsername ? cortexFollowConfirmed : undefined,
+          orderCreated: order.created,
+          cortexProducts,
+        });
+
+        // Send admin notification
+        const adminEmailResult = await emailSender.sendEmail({
+          to: env.ADMIN_EMAIL,
+          subject: adminEmailTemplate.subject,
+          html: adminEmailTemplate.html,
+          text: adminEmailTemplate.text,
+        });
+
+        if (adminEmailResult.isErr()) {
+          logger.error("Failed to send Cortex admin notification email", {
+            orderId: order.id,
+            adminEmail: env.ADMIN_EMAIL,
+            error: adminEmailResult.error,
+          });
+          // Don't fail the whole webhook - tokens and customer email were sent successfully
+        } else {
+          logger.info("Cortex admin notification email sent successfully", {
+            orderId: order.id,
+            adminEmail: env.ADMIN_EMAIL,
+            cortexProductsCount: cortexLines.length,
+          });
+        }
+      } else if (cortexLines.length > 0) {
+        logger.debug("Cortex products detected but admin email not configured", {
+          orderId: order.id,
+          cortexProductsCount: cortexLines.length,
+          adminEmailConfigured: !!env.ADMIN_EMAIL,
+          emailEnabled: env.EMAIL_ENABLED,
+        });
       }
 
       return ok({

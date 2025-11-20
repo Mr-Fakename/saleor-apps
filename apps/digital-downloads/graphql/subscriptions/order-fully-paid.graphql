@@ -6,6 +6,10 @@ subscription OrderFullyPaid {
         number
         created
         userEmail
+        metadata {
+          key
+          value
+        }
         user {
           id
           email

@@ -40,6 +40,7 @@ export const env = createEnv({
     // Email configuration
     EMAIL_ENABLED: booleanSchema.optional().default("false"),
     EMAIL_FROM: z.string().email().optional(),
+    ADMIN_EMAIL: z.string().email().optional(),
     // SMTP configuration
     SMTP_HOST: z.string().optional(),
     SMTP_PORT: z.coerce.number().optional().default(587),
@@ -82,6 +83,7 @@ export const env = createEnv({
     // Email configuration
     EMAIL_ENABLED: process.env.EMAIL_ENABLED,
     EMAIL_FROM: process.env.EMAIL_FROM,
+    ADMIN_EMAIL: process.env.ADMIN_EMAIL,
     SMTP_HOST: process.env.SMTP_HOST,
     SMTP_PORT: process.env.SMTP_PORT,
     SMTP_USER: process.env.SMTP_USER,
