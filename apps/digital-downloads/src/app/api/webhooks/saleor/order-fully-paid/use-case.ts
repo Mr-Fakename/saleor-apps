@@ -63,12 +63,15 @@ function hasDigitalFiles(line: any): boolean {
 }
 
 /**
- * Extracts the file URL from a line item
+ * Extracts ALL file URLs from a line item
  *
- * Looks for attributes with file-related names (Files, File, Download, etc.)
+ * Looks for attributes with file-related names (Files, Files Part 2, File, Download, etc.)
+ * Collects all files from multiple file attributes to support multi-part downloads
  * Priority: variant attributes > product attributes > variant media > product media
  */
-function getFileUrl(line: any): string | null {
+function getFileUrls(line: any): string[] {
+  const fileUrls: string[] = [];
+
   // File-related attribute names to look for (case-insensitive)
   const fileAttributeNames = [
     "file",
@@ -93,11 +96,12 @@ function getFileUrl(line: any): string | null {
     const attributeName = attr?.attribute?.name || "";
 
     // Only check attributes with file-related names
+    // This will match "Files", "Files Part 2", "File", etc.
     if (isFileAttribute(attributeName)) {
       const values = attr?.values || [];
       for (const value of values) {
         if (value?.file?.url) {
-          return value.file.url;
+          fileUrls.push(value.file.url);
         }
       }
     }
@@ -109,29 +113,38 @@ function getFileUrl(line: any): string | null {
     const attributeName = attr?.attribute?.name || "";
 
     // Only check attributes with file-related names
+    // This will match "Files", "Files Part 2", "File", etc.
     if (isFileAttribute(attributeName)) {
       const values = attr?.values || [];
       for (const value of values) {
         if (value?.file?.url) {
-          return value.file.url;
+          fileUrls.push(value.file.url);
         }
       }
     }
   }
 
-  // Check 3: Variant media
-  const variantMedia = line?.variant?.media || [];
-  if (variantMedia.length > 0) {
-    return variantMedia[0]?.url || null;
+  // Check 3: Variant media (only if no file attributes found)
+  if (fileUrls.length === 0) {
+    const variantMedia = line?.variant?.media || [];
+    for (const media of variantMedia) {
+      if (media?.url) {
+        fileUrls.push(media.url);
+      }
+    }
   }
 
-  // Check 4: Product media (lowest priority)
-  const productMedia = line?.variant?.product?.media || [];
-  if (productMedia.length > 0) {
-    return productMedia[0]?.url || null;
+  // Check 4: Product media (only if no files found yet, lowest priority)
+  if (fileUrls.length === 0) {
+    const productMedia = line?.variant?.product?.media || [];
+    for (const media of productMedia) {
+      if (media?.url) {
+        fileUrls.push(media.url);
+      }
+    }
   }
 
-  return null;
+  return fileUrls;
 }
 
 export class OrderFullyPaidUseCase {
@@ -157,14 +170,11 @@ export class OrderFullyPaidUseCase {
         );
       }
 
-      logger.info(
-        "🚀 NEW CODE RUNNING - Processing ORDER_FULLY_PAID webhook v2 with attributes support",
-        {
-          orderId: order.id,
-          orderNumber: order.number,
-          codeVersion: "2.0-with-attributes",
-        },
-      );
+      logger.info("🚀 Processing ORDER_FULLY_PAID webhook with multi-file support", {
+        orderId: order.id,
+        orderNumber: order.number,
+        codeVersion: "3.0-multi-file-support",
+      });
 
       // Debug: Log all order lines and their metadata
       order.lines.forEach((line, index) => {
@@ -216,79 +226,108 @@ export class OrderFullyPaidUseCase {
       expiryDate.setHours(expiryDate.getHours() + env.DOWNLOAD_TOKEN_EXPIRY_HOURS);
 
       for (const line of digitalLines) {
-        const fileUrl = getFileUrl(line);
+        const fileUrls = getFileUrls(line);
 
-        if (!fileUrl) {
-          logger.warn("No file URL found for digital line", {
+        if (fileUrls.length === 0) {
+          logger.warn("No file URLs found for digital line", {
             orderId: order.id,
             lineId: line.id,
           });
           continue;
         }
 
-        // Generate the token signature
-        const tokenString = generateDownloadToken({
-          orderId: order.id,
-          fileUrl: fileUrl,
-          expiresAt: expiryDate.toISOString(),
-        });
-
-        // Create the download token entity
-        const downloadToken = createDownloadToken({
-          token: tokenString as DownloadToken["token"],
-          orderId: order.id,
-          orderNumber: order.number,
-          customerId: order.user?.id,
-          customerEmail: order.user?.email || order.userEmail || undefined,
-          fileUrl: fileUrl,
-          productName: line.productName,
-          variantName: line.variantName || undefined,
-          expiresAt: expiryDate.toISOString(),
-          maxDownloads: env.MAX_DOWNLOAD_LIMIT,
-        });
-
-        // Save to repository
-        const saveResult = await this.downloadTokenRepo.save(downloadToken);
-
-        if (saveResult.isErr()) {
-          logger.error("Failed to save download token", {
-            orderId: order.id,
-            lineId: line.id,
-            error: saveResult.error,
-          });
-          continue;
-        }
-
-        tokens.push(downloadToken);
-
-        // Construct the download URL for testing
-        const downloadUrl = `${env.APP_API_BASE_URL}/api/downloads/${tokenString}`;
-
-        logger.info("Download token created successfully", {
+        logger.debug("Found file URLs for digital line", {
           orderId: order.id,
           lineId: line.id,
-          token: tokenString,
-          downloadUrl: downloadUrl,
+          fileCount: fileUrls.length,
+          fileUrls: fileUrls,
         });
 
-        // Log download URL to console for easy testing
-        const displayEmail = order.user?.email || order.userEmail || "Guest";
-        console.log("\n╔═══════════════════════════════════════════════════════════════════");
-        console.log("║ 🔗 DOWNLOAD LINK CREATED");
-        console.log("╠═══════════════════════════════════════════════════════════════════");
-        console.log(`║ Product: ${line.productName}`);
-        if (line.variantName) {
-          console.log(`║ Variant: ${line.variantName}`);
+        // Create a download token for EACH file URL
+        // This supports multi-part downloads (Files, Files Part 2, etc.)
+        for (let fileIndex = 0; fileIndex < fileUrls.length; fileIndex++) {
+          const fileUrl = fileUrls[fileIndex];
+
+          // Generate the token signature
+          const tokenString = generateDownloadToken({
+            orderId: order.id,
+            fileUrl: fileUrl,
+            expiresAt: expiryDate.toISOString(),
+          });
+
+          // Determine variant name with part number for multi-file products
+          let variantName = line.variantName || undefined;
+          if (fileUrls.length > 1) {
+            // Multiple files detected - add part number to variant name
+            const partNumber = fileIndex + 1;
+            variantName = variantName
+              ? `${variantName} - Part ${partNumber}`
+              : `Part ${partNumber}`;
+          }
+
+          // Create the download token entity
+          const downloadToken = createDownloadToken({
+            token: tokenString as DownloadToken["token"],
+            orderId: order.id,
+            orderNumber: order.number,
+            customerId: order.user?.id,
+            customerEmail: order.user?.email || order.userEmail || undefined,
+            fileUrl: fileUrl,
+            productName: line.productName,
+            variantName: variantName,
+            expiresAt: expiryDate.toISOString(),
+            maxDownloads: env.MAX_DOWNLOAD_LIMIT,
+          });
+
+          // Save to repository
+          const saveResult = await this.downloadTokenRepo.save(downloadToken);
+
+          if (saveResult.isErr()) {
+            logger.error("Failed to save download token", {
+              orderId: order.id,
+              lineId: line.id,
+              fileUrl: fileUrl,
+              error: saveResult.error,
+            });
+            continue;
+          }
+
+          tokens.push(downloadToken);
+
+          // Construct the download URL for testing
+          const downloadUrl = `${env.APP_API_BASE_URL}/api/downloads/${tokenString}`;
+
+          logger.info("Download token created successfully", {
+            orderId: order.id,
+            lineId: line.id,
+            fileIndex: fileIndex,
+            totalFiles: fileUrls.length,
+            token: tokenString,
+            downloadUrl: downloadUrl,
+          });
+
+          // Log download URL to console for easy testing
+          const displayEmail = order.user?.email || order.userEmail || "Guest";
+          console.log("\n╔═══════════════════════════════════════════════════════════════════");
+          console.log("║ 🔗 DOWNLOAD LINK CREATED");
+          console.log("╠═══════════════════════════════════════════════════════════════════");
+          console.log(`║ Product: ${line.productName}`);
+          if (variantName) {
+            console.log(`║ Variant: ${variantName}`);
+          }
+          if (fileUrls.length > 1) {
+            console.log(`║ File: ${fileIndex + 1} of ${fileUrls.length}`);
+          }
+          console.log(`║ Order: ${order.number}`);
+          console.log(`║ Customer: ${displayEmail}`);
+          console.log("╠═══════════════════════════════════════════════════════════════════");
+          console.log(`║ 📥 Download URL:`);
+          console.log(`║ ${downloadUrl}`);
+          console.log("╠═══════════════════════════════════════════════════════════════════");
+          console.log(`║ Valid until: ${expiryDate.toISOString()}`);
+          console.log(`║ Max downloads: ${env.MAX_DOWNLOAD_LIMIT}`);
+          console.log("╚═══════════════════════════════════════════════════════════════════\n");
         }
-        console.log(`║ Order: ${order.number}`);
-        console.log(`║ Customer: ${displayEmail}`);
-        console.log("╠═══════════════════════════════════════════════════════════════════");
-        console.log(`║ 📥 Download URL:`);
-        console.log(`║ ${downloadUrl}`);
-        console.log("╠═══════════════════════════════════════════════════════════════════");
-        console.log(`║ Valid until: ${expiryDate.toISOString()}`);
-        console.log(`║ Max downloads: ${env.MAX_DOWNLOAD_LIMIT}`);
-        console.log("╚═══════════════════════════════════════════════════════════════════\n");
       }
 
       if (tokens.length === 0) {
