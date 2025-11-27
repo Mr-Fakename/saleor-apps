@@ -223,7 +223,28 @@ export class OrderFullyPaidUseCase {
       const tokens: DownloadToken[] = [];
       const expiryDate = new Date();
 
+      logger.debug("Token expiry configuration", {
+        downloadTokenExpiryHours: env.DOWNLOAD_TOKEN_EXPIRY_HOURS,
+        currentDate: expiryDate.toISOString(),
+      });
+
       expiryDate.setHours(expiryDate.getHours() + env.DOWNLOAD_TOKEN_EXPIRY_HOURS);
+
+      // Validate the expiry date is valid after calculation
+      if (isNaN(expiryDate.getTime())) {
+        logger.error("Invalid expiry date calculated", {
+          downloadTokenExpiryHours: env.DOWNLOAD_TOKEN_EXPIRY_HOURS,
+          expiryDate: expiryDate,
+        });
+        return err(
+          new OrderFullyPaidUseCaseErrors.TokenGenerationError(
+            "Invalid expiry date configuration",
+            {
+              cause: { expiryHours: env.DOWNLOAD_TOKEN_EXPIRY_HOURS },
+            },
+          ),
+        );
+      }
 
       for (const line of digitalLines) {
         const fileUrls = getFileUrls(line);
@@ -401,12 +422,23 @@ export class OrderFullyPaidUseCase {
         tokens,
       });
     } catch (error) {
-      logger.error("Unhandled error in OrderFullyPaidUseCase", { error });
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+
+      logger.error("Unhandled error in OrderFullyPaidUseCase", {
+        error,
+        errorMessage,
+        errorStack,
+        errorType: error?.constructor?.name,
+      });
 
       return err(
-        new OrderFullyPaidUseCaseErrors.TokenGenerationError("Unhandled error occurred", {
-          cause: error,
-        }),
+        new OrderFullyPaidUseCaseErrors.TokenGenerationError(
+          `Unhandled error occurred: ${errorMessage}`,
+          {
+            cause: error,
+          },
+        ),
       );
     }
   }
