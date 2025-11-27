@@ -77,7 +77,7 @@ export const env = createEnv({
     AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY,
     APPSTORE_URL: process.env.APPSTORE_URL,
     APP_NAME: process.env.APP_NAME,
-    DOWNLOAD_TOKEN_EXPIRY_HOURS: process.env.DOWNLOAD_TOKEN_EXPIRY_HOURS,
+    DOWNLOAD_TOKEN_EXPIRY_HOURS: process.env.TOKEN_EXPIRY_HOURS,
     MAX_DOWNLOAD_LIMIT: process.env.MAX_DOWNLOAD_LIMIT,
     // Email configuration
     EMAIL_ENABLED: process.env.EMAIL_ENABLED,
