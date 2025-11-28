@@ -13,6 +13,12 @@ import { generateDownloadToken } from "@/modules/token-generator/generate-downlo
 import { OrderFullyPaidEventFragment } from "@/app/api/webhooks/saleor/order-fully-paid/webhook-definition";
 import { emailSender } from "@/modules/email/email-sender";
 import { generateOrderConfirmationEmail } from "@/modules/email/order-confirmation-template";
+import { getFileUrls, type FileMetadata } from "./file-utils";
+import { fetchProductAttributes } from "./fetch-product-attributes";
+import {
+  generateCortexAdminNotificationEmail,
+  type CortexProduct,
+} from "@/modules/email/cortex-admin-notification-template";
 
 const logger = createLogger("OrderFullyPaidUseCase");
 
@@ -35,6 +41,8 @@ export type OrderFullyPaidUseCaseError =
 
 export interface OrderFullyPaidUseCaseInput {
   payload: OrderFullyPaidEventFragment;
+  saleorApiUrl: string;
+  authToken: string;
 }
 
 export interface OrderFullyPaidUseCaseOutput {
@@ -63,75 +71,78 @@ function hasDigitalFiles(line: any): boolean {
 }
 
 /**
- * Extracts the file URL from a line item
+ * Checks if a product is a Cortex product
  *
- * Looks for attributes with file-related names (Files, File, Download, etc.)
- * Priority: variant attributes > product attributes > variant media > product media
+ * A product is considered a Cortex product if:
+ * 1. Product Type name contains "Capture" (case-insensitive)
+ * 2. Has a platform attribute with value "Cortex" (case-insensitive)
  */
-function getFileUrl(line: any): string | null {
-  // File-related attribute names to look for (case-insensitive)
-  const fileAttributeNames = [
-    "file",
-    "files",
-    "download",
-    "downloads",
-    "attachment",
-    "attachments",
-  ];
+function isCortexProduct(line: any): boolean {
+  const product = line?.variant?.product;
+  const productTypeName = product?.productType?.name || "";
 
-  /**
-   * Helper to check if an attribute name matches file-related patterns
-   */
-  const isFileAttribute = (attributeName: string): boolean => {
-    const lowerName = attributeName.toLowerCase();
-    return fileAttributeNames.some((pattern) => lowerName.includes(pattern));
-  };
+  logger.debug("Checking if product is Cortex product", {
+    productName: line?.productName,
+    productType: productTypeName,
+    variantAttributesCount: line?.variant?.attributes?.length || 0,
+    productAttributesCount: product?.attributes?.length || 0,
+  });
 
-  // Check 1: Variant attributes with file values (highest priority)
+  // Check if product type name contains "Capture" (more flexible than exact match)
+  const isCapture = productTypeName.toLowerCase().includes("capture");
+
+  if (!isCapture) {
+    logger.debug("Product is not Cortex - product type doesn't contain 'capture'", {
+      productName: line?.productName,
+      productType: productTypeName,
+    });
+    return false;
+  }
+
+  // Check for Cortex platform attribute in variant or product attributes
   const variantAttributes = line?.variant?.attributes || [];
-  for (const attr of variantAttributes) {
-    const attributeName = attr?.attribute?.name || "";
+  const productAttributes = product?.attributes || [];
+  const allAttributes = [...variantAttributes, ...productAttributes];
 
-    // Only check attributes with file-related names
-    if (isFileAttribute(attributeName)) {
-      const values = attr?.values || [];
-      for (const value of values) {
-        if (value?.file?.url) {
-          return value.file.url;
-        }
-      }
+  logger.debug("Checking attributes for Cortex platform", {
+    productName: line?.productName,
+    totalAttributes: allAttributes.length,
+    attributes: allAttributes.map((attr: any) => ({
+      name: attr?.attribute?.name,
+      slug: attr?.attribute?.slug,
+      values: attr?.values?.map((v: any) => v?.name),
+    })),
+  });
+
+  // Look for platform attribute with value "Cortex"
+  const hasCortex = allAttributes.some((attr: any) => {
+    // Check if this is a platform attribute (by name or slug)
+    const attrName = attr?.attribute?.name?.toLowerCase() || "";
+    const attrSlug = attr?.attribute?.slug?.toLowerCase() || "";
+    const isPlatformAttr = attrName === "platform" || attrSlug === "platform";
+
+    if (isPlatformAttr) {
+      logger.debug("Found platform attribute", {
+        attributeName: attr?.attribute?.name,
+        values: attr?.values?.map((v: any) => v?.name),
+      });
     }
-  }
 
-  // Check 2: Product attributes with file values
-  const productAttributes = line?.variant?.product?.attributes || [];
-  for (const attr of productAttributes) {
-    const attributeName = attr?.attribute?.name || "";
+    return attr?.values?.some((val: any) => {
+      const name = val?.name?.toLowerCase() || "";
+      return name === "cortex";
+    });
+  });
 
-    // Only check attributes with file-related names
-    if (isFileAttribute(attributeName)) {
-      const values = attr?.values || [];
-      for (const value of values) {
-        if (value?.file?.url) {
-          return value.file.url;
-        }
-      }
-    }
-  }
+  logger.info("Cortex product check result", {
+    productName: line?.productName,
+    productType: productTypeName,
+    isCapture,
+    hasCortex,
+    isCortexProduct: isCapture && hasCortex,
+  });
 
-  // Check 3: Variant media
-  const variantMedia = line?.variant?.media || [];
-  if (variantMedia.length > 0) {
-    return variantMedia[0]?.url || null;
-  }
-
-  // Check 4: Product media (lowest priority)
-  const productMedia = line?.variant?.product?.media || [];
-  if (productMedia.length > 0) {
-    return productMedia[0]?.url || null;
-  }
-
-  return null;
+  return isCapture && hasCortex;
 }
 
 export class OrderFullyPaidUseCase {
@@ -157,35 +168,9 @@ export class OrderFullyPaidUseCase {
         );
       }
 
-      logger.info(
-        "🚀 NEW CODE RUNNING - Processing ORDER_FULLY_PAID webhook v2 with attributes support",
-        {
-          orderId: order.id,
-          orderNumber: order.number,
-          codeVersion: "2.0-with-attributes",
-        },
-      );
-
-      // Debug: Log all order lines and their metadata
-      order.lines.forEach((line, index) => {
-        logger.debug("Order line details", {
-          lineIndex: index,
-          lineId: line.id,
-          productName: line.productName,
-          variantName: line.variantName,
-          variantId: line.variant?.id,
-          productId: line.variant?.product?.id,
-          productTypeName: line.variant?.product?.productType?.name,
-          productTypeMetadata: line.variant?.product?.productType?.metadata,
-          productMetadata: line.variant?.product?.metadata,
-          productAttributes: line.variant?.product?.attributes,
-          variantMetadata: line.variant?.metadata,
-          variantAttributes: line.variant?.attributes,
-          variantMediaCount: line.variant?.media?.length || 0,
-          productMediaCount: line.variant?.product?.media?.length || 0,
-          variantMedia: line.variant?.media,
-          productMedia: line.variant?.product?.media,
-        });
+      logger.info("Processing ORDER_FULLY_PAID webhook", {
+        orderId: order.id,
+        orderNumber: order.number,
       });
 
       // Filter lines that have digital files
@@ -204,91 +189,91 @@ export class OrderFullyPaidUseCase {
         );
       }
 
-      logger.debug("Found digital items in order", {
-        orderId: order.id,
-        count: digitalLines.length,
-      });
-
       // Generate download tokens for each digital line
       const tokens: DownloadToken[] = [];
-      const expiryDate = new Date();
 
-      expiryDate.setHours(expiryDate.getHours() + env.DOWNLOAD_TOKEN_EXPIRY_HOURS);
+      // Calculate expiry date (null = infinite/never expires)
+      const expiryDate = env.DOWNLOAD_TOKEN_EXPIRY_HOURS
+        ? new Date(Date.now() + env.DOWNLOAD_TOKEN_EXPIRY_HOURS * 60 * 60 * 1000)
+        : null;
 
       for (const line of digitalLines) {
-        const fileUrl = getFileUrl(line);
+        // Fetch product attributes from API (webhooks don't include FILE-type attributes reliably)
+        const productId = line.variant?.product?.id;
+        let productAttributes = undefined;
+        
+        if (productId) {
+          const attributesResult = await fetchProductAttributes(
+            input.saleorApiUrl,
+            input.authToken,
+            productId,
+          );
 
-        if (!fileUrl) {
-          logger.warn("No file URL found for digital line", {
+          if (attributesResult.isOk()) {
+            productAttributes = attributesResult.value;
+          } else {
+            logger.warn("Failed to fetch product attributes from API", {
+              productId,
+              error: attributesResult.error.message,
+            });
+          }
+        }
+        
+        const fileMetadataList = getFileUrls(line, productAttributes);
+
+        if (fileMetadataList.length === 0) {
+          logger.warn("No file URLs found for digital line", {
             orderId: order.id,
             lineId: line.id,
+            productName: line.productName,
           });
           continue;
         }
 
-        // Generate the token signature
-        const tokenString = generateDownloadToken({
-          orderId: order.id,
-          fileUrl: fileUrl,
-          expiresAt: expiryDate.toISOString(),
-        });
+        const totalFiles = fileMetadataList.length;
+        const fileGroup = `${line.variant?.product?.id || line.productName}-files`;
 
-        // Create the download token entity
-        const downloadToken = createDownloadToken({
-          token: tokenString as DownloadToken["token"],
-          orderId: order.id,
-          orderNumber: order.number,
-          customerId: order.user?.id,
-          customerEmail: order.user?.email || order.userEmail || undefined,
-          fileUrl: fileUrl,
-          productName: line.productName,
-          variantName: line.variantName || undefined,
-          expiresAt: expiryDate.toISOString(),
-          maxDownloads: env.MAX_DOWNLOAD_LIMIT,
-        });
+        for (let fileIndex = 0; fileIndex < fileMetadataList.length; fileIndex++) {
+          const fileMeta = fileMetadataList[fileIndex];
+          const fileUrl = fileMeta.url;
 
-        // Save to repository
-        const saveResult = await this.downloadTokenRepo.save(downloadToken);
-
-        if (saveResult.isErr()) {
-          logger.error("Failed to save download token", {
+          const tokenString = generateDownloadToken({
             orderId: order.id,
-            lineId: line.id,
-            error: saveResult.error,
+            fileUrl: fileUrl,
+            expiresAt: expiryDate ? expiryDate.toISOString() : "never",
           });
-          continue;
+
+          const downloadToken = createDownloadToken({
+            token: tokenString as DownloadToken["token"],
+            orderId: order.id,
+            orderNumber: order.number,
+            customerId: order.user?.id,
+            customerEmail: order.user?.email || order.userEmail || undefined,
+            fileUrl: fileUrl,
+            productName: line.productName,
+            variantName: line.variantName || undefined,
+            expiresAt: expiryDate ? expiryDate.toISOString() : undefined,
+            maxDownloads: env.MAX_DOWNLOAD_LIMIT ?? undefined,
+            fileGroup: fileGroup,
+            fileIndex: fileIndex + 1,
+            totalFiles: totalFiles,
+            fileName: fileMeta.name,
+          });
+
+          const saveResult = await this.downloadTokenRepo.save(downloadToken);
+
+          if (saveResult.isErr()) {
+            logger.error("Failed to save download token", {
+              orderId: order.id,
+              lineId: line.id,
+              fileName: fileMeta.name,
+              error: saveResult.error,
+            });
+            continue;
+          }
+
+          tokens.push(downloadToken);
         }
-
-        tokens.push(downloadToken);
-
-        // Construct the download URL for testing
-        const downloadUrl = `${env.APP_API_BASE_URL}/api/downloads/${tokenString}`;
-
-        logger.info("Download token created successfully", {
-          orderId: order.id,
-          lineId: line.id,
-          token: tokenString,
-          downloadUrl: downloadUrl,
-        });
-
-        // Log download URL to console for easy testing
-        const displayEmail = order.user?.email || order.userEmail || "Guest";
-        console.log("\n╔═══════════════════════════════════════════════════════════════════");
-        console.log("║ 🔗 DOWNLOAD LINK CREATED");
-        console.log("╠═══════════════════════════════════════════════════════════════════");
-        console.log(`║ Product: ${line.productName}`);
-        if (line.variantName) {
-          console.log(`║ Variant: ${line.variantName}`);
-        }
-        console.log(`║ Order: ${order.number}`);
-        console.log(`║ Customer: ${displayEmail}`);
-        console.log("╠═══════════════════════════════════════════════════════════════════");
-        console.log(`║ 📥 Download URL:`);
-        console.log(`║ ${downloadUrl}`);
-        console.log("╠═══════════════════════════════════════════════════════════════════");
-        console.log(`║ Valid until: ${expiryDate.toISOString()}`);
-        console.log(`║ Max downloads: ${env.MAX_DOWNLOAD_LIMIT}`);
-        console.log("╚═══════════════════════════════════════════════════════════════════\n");
       }
 
       if (tokens.length === 0) {
@@ -302,20 +287,20 @@ export class OrderFullyPaidUseCase {
         );
       }
 
-      logger.info("Successfully processed order", {
+      logger.info("Successfully created download tokens", {
         orderId: order.id,
+        orderNumber: order.number,
         tokensCreated: tokens.length,
+        digitalProducts: tokens.map(t => ({
+          product: t.productName,
+          file: t.fileName,
+          expiresAt: t.expiresAt,
+        })),
       });
 
       // Send order confirmation email with download links
       const customerEmail = order.user?.email || order.userEmail;
       if (customerEmail && env.EMAIL_ENABLED) {
-        logger.info("Sending order confirmation email", {
-          orderId: order.id,
-          customerEmail: customerEmail,
-          tokensCount: tokens.length,
-        });
-
         const appBaseUrl = env.APP_API_BASE_URL || "http://localhost:3003";
         const emailTemplate = generateOrderConfirmationEmail({
           orderNumber: order.number,
@@ -337,22 +322,100 @@ export class OrderFullyPaidUseCase {
             customerEmail: customerEmail,
             error: emailResult.error,
           });
-          // Don't fail the whole webhook - tokens were created successfully
-          // Email failure is a non-critical error
         } else {
-          logger.info("Order confirmation email sent successfully", {
+          logger.info("Order confirmation email sent", {
             orderId: order.id,
             customerEmail: customerEmail,
           });
         }
-      } else {
-        if (!customerEmail) {
-          logger.warn("Cannot send email - no customer email found", {
+      } else if (!customerEmail) {
+        logger.warn("No customer email found for order", {
+          orderId: order.id,
+        });
+      }
+
+      // Send admin notification for Cortex products
+      logger.info("Checking order for Cortex products", {
+        orderId: order.id,
+        totalLines: order.lines.length,
+        adminEmail: env.ADMIN_EMAIL,
+        adminEmailType: typeof env.ADMIN_EMAIL,
+        adminEmailDefined: env.ADMIN_EMAIL !== undefined,
+        emailEnabled: env.EMAIL_ENABLED,
+      });
+
+      const cortexLines = order.lines.filter((line) => isCortexProduct(line));
+
+      logger.info("Cortex product detection complete", {
+        orderId: order.id,
+        cortexProductsCount: cortexLines.length,
+        hasAdminEmail: !!env.ADMIN_EMAIL,
+        emailEnabled: env.EMAIL_ENABLED,
+      });
+
+      if (cortexLines.length > 0 && env.ADMIN_EMAIL && env.EMAIL_ENABLED) {
+        logger.info("Detected Cortex products, sending admin notification", {
+          orderId: order.id,
+          cortexProductsCount: cortexLines.length,
+          adminEmail: env.ADMIN_EMAIL,
+        });
+
+        // Extract Cortex Cloud username from order metadata
+        const cortexCloudUsername = order.metadata?.find(
+          (meta: any) => meta.key === "cortexCloudUsername",
+        )?.value;
+
+        logger.info("Extracted Cortex Cloud username from metadata", {
+          orderId: order.id,
+          cortexCloudUsername: cortexCloudUsername,
+          hasUsername: !!cortexCloudUsername,
+          allMetadata: order.metadata?.map((m: any) => ({ key: m.key, value: m.value })),
+        });
+
+        // Build Cortex products list
+        const cortexProducts: CortexProduct[] = cortexLines.map((line) => ({
+          productName: line.productName,
+          variantName: line.variantName || undefined,
+          productType: line.variant?.product?.productType?.name || "Unknown",
+          platformAttribute:
+            line.variant?.attributes
+              ?.concat(line.variant?.product?.attributes || [])
+              .flatMap((attr: any) => attr?.values || [])
+              .find((val: any) => val?.name?.toLowerCase() === "cortex")?.name || "Cortex",
+        }));
+
+        const customerName = order.user?.firstName && order.user?.lastName
+          ? `${order.user.firstName} ${order.user.lastName}`
+          : order.user?.firstName || order.user?.lastName || undefined;
+
+        const adminEmailTemplate = generateCortexAdminNotificationEmail({
+          orderNumber: order.number,
+          orderId: order.id,
+          customerEmail: customerEmail || order.userEmail || "Unknown",
+          customerName,
+          cortexCloudUsername,
+          cortexProducts,
+          orderDate: order.created,
+        });
+
+        const adminEmailResult = await emailSender.sendEmail({
+          to: env.ADMIN_EMAIL,
+          subject: adminEmailTemplate.subject,
+          html: adminEmailTemplate.html,
+          text: adminEmailTemplate.text,
+        });
+
+        if (adminEmailResult.isErr()) {
+          logger.error("Failed to send Cortex admin notification email", {
             orderId: order.id,
+            adminEmail: env.ADMIN_EMAIL,
+            error: adminEmailResult.error,
           });
-        } else if (!env.EMAIL_ENABLED) {
-          logger.debug("Email sending disabled via EMAIL_ENABLED=false", {
+        } else {
+          logger.info("Cortex admin notification email sent successfully", {
             orderId: order.id,
+            adminEmail: env.ADMIN_EMAIL,
+            cortexProductsCount: cortexProducts.length,
           });
         }
       }

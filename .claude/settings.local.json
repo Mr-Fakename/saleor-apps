@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm run generate:*)",
+      "Bash(pnpm run generate:app-graphql-types:*)",
+      "Bash(pnpm --filter saleor-app-digital-downloads run generate:app-graphql-types:*)",
+      "Bash(pnpm --filter saleor-app-digital-downloads run check-types)",
+      "Bash(pnpm --filter saleor-app-digital-downloads run build)",
+      "Bash(curl:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

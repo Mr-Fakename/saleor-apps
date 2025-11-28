@@ -47,6 +47,8 @@ const handler = orderFullyPaidWebhookDefinition.createHandler(
 
       const result = await orderFullyPaidUseCase.execute({
         payload: ctx.payload,
+        saleorApiUrl: ctx.authData.saleorApiUrl,
+        authToken: ctx.authData.token,
       });
 
       return result.match(

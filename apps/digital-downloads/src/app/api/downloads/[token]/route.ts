@@ -39,42 +39,46 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
 
     const token = tokenResult.value;
 
-    // Check expiry
-    const now = new Date();
-    const expiryDate = new Date(token.expiresAt);
+    // Check expiry (undefined/null = infinite, never expires)
+    if (token.expiresAt) {
+      const now = new Date();
+      const expiryDate = new Date(token.expiresAt);
 
-    if (expiryDate < now) {
-      logger.warn("Token has expired", {
-        token: tokenParam,
-        expiresAt: token.expiresAt,
-        now: now.toISOString(),
-      });
-
-      return NextResponse.json(
-        {
-          error: "Token has expired",
+      if (expiryDate < now) {
+        logger.warn("Token has expired", {
+          token: tokenParam,
           expiresAt: token.expiresAt,
-        },
-        { status: 410 },
-      );
+          now: now.toISOString(),
+        });
+
+        return NextResponse.json(
+          {
+            error: "Token has expired",
+            expiresAt: token.expiresAt,
+          },
+          { status: 410 },
+        );
+      }
     }
 
-    // Check download limits
-    if (token.downloadCount >= token.maxDownloads) {
-      logger.warn("Download limit exceeded", {
-        token: tokenParam,
-        downloadCount: token.downloadCount,
-        maxDownloads: token.maxDownloads,
-      });
-
-      return NextResponse.json(
-        {
-          error: "Download limit exceeded",
+    // Check download limits (undefined/null = infinite downloads)
+    if (token.maxDownloads !== undefined && token.maxDownloads !== null) {
+      if (token.downloadCount >= token.maxDownloads) {
+        logger.warn("Download limit exceeded", {
+          token: tokenParam,
           downloadCount: token.downloadCount,
           maxDownloads: token.maxDownloads,
-        },
-        { status: 403 },
-      );
+        });
+
+        return NextResponse.json(
+          {
+            error: "Download limit exceeded",
+            downloadCount: token.downloadCount,
+            maxDownloads: token.maxDownloads,
+          },
+          { status: 403 },
+        );
+      }
     }
 
     // Increment download count

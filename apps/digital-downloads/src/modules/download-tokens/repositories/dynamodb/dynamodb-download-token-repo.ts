@@ -51,6 +51,10 @@ export class DynamoDBDownloadTokenRepo implements DownloadTokenRepo {
       downloadCount: dbModel.downloadCount,
       createdAt: dbModel.createdAt,
       lastAccessedAt: dbModel.lastAccessedAt,
+      fileGroup: dbModel.fileGroup,
+      fileIndex: dbModel.fileIndex,
+      totalFiles: dbModel.totalFiles,
+      fileName: dbModel.fileName,
     };
   }
 
@@ -71,6 +75,10 @@ export class DynamoDBDownloadTokenRepo implements DownloadTokenRepo {
       downloadCount: token.downloadCount,
       createdAt: token.createdAt,
       lastAccessedAt: token.lastAccessedAt,
+      fileGroup: token.fileGroup,
+      fileIndex: token.fileIndex,
+      totalFiles: token.totalFiles,
+      fileName: token.fileName,
     };
   }
 

@@ -1,0 +1,85 @@
+query GetProductAttributes($productId: ID!) {
+  product(id: $productId) {
+    id
+    name
+    slug
+    productType {
+      name
+      metadata {
+        key
+        value
+      }
+    }
+    metadata {
+      key
+      value
+    }
+    # Query each file attribute part separately using assignedAttribute
+    # This API is more reliable for FILE-type attributes than the attributes field
+    files: assignedAttribute(slug: "files") {
+      ... on AssignedFileAttribute {
+        attribute {
+          id
+          slug
+          name
+        }
+        value {
+          url
+          contentType
+        }
+      }
+    }
+    files_2: assignedAttribute(slug: "files-part-2") {
+      ... on AssignedFileAttribute {
+        attribute {
+          id
+          slug
+          name
+        }
+        value {
+          url
+          contentType
+        }
+      }
+    }
+    files_3: assignedAttribute(slug: "files-part-3") {
+      ... on AssignedFileAttribute {
+        attribute {
+          id
+          slug
+          name
+        }
+        value {
+          url
+          contentType
+        }
+      }
+    }
+    files_4: assignedAttribute(slug: "files-part-4") {
+      ... on AssignedFileAttribute {
+        attribute {
+          id
+          slug
+          name
+        }
+        value {
+          url
+          contentType
+        }
+      }
+    }
+    files_5: assignedAttribute(slug: "files-part-5") {
+      ... on AssignedFileAttribute {
+        attribute {
+          id
+          slug
+          name
+        }
+        value {
+          url
+          contentType
+        }
+      }
+    }
+  }
+}

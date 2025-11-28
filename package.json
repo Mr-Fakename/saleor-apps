@@ -15,16 +15,15 @@
     "github:release": "pnpm changeset tag && git push --follow-tags",
     "knip": "knip --config knip.config.ts",
     "lint": "turbo run lint",
-    "lint-staged": "lint-staged",
     "lint:fix": "turbo run lint:fix",
     "lint:packages": "sherif",
     "lint:packages:fix": "sherif --fix",
-    "prepare": "husky",
     "start": "turbo run start",
     "test": "turbo run test",
     "test:ci": "turbo run test:ci"
   },
   "dependencies": {
+    "@opentelemetry/api": "catalog:",
     "busboy": "1.6.0"
   },
   "devDependencies": {
@@ -32,9 +31,7 @@
     "@cspell/cspell-types": "8.17.5",
     "@saleor/app-sdk": "catalog:",
     "cspell": "8.17.5",
-    "husky": "9.1.4",
     "knip": "5.46.2",
-    "lint-staged": "15.5.0",
     "prettier": "3.0.3",
     "sherif": "1.4.0",
     "sort-package-json": "3.0.0",

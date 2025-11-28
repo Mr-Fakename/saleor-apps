@@ -9,11 +9,16 @@ export interface DownloadTokenDbModel {
   fileUrl: string;
   productName: string;
   variantName?: string;
-  expiresAt: string;
-  maxDownloads: number;
+  expiresAt?: string; // undefined = infinite/never expires
+  maxDownloads?: number; // undefined = unlimited downloads
   downloadCount: number;
   createdAt: string;
   lastAccessedAt?: string;
+  // File grouping metadata
+  fileGroup?: string;
+  fileIndex?: number;
+  totalFiles?: number;
+  fileName?: string;
 }
 
 export class DownloadTokenEntity {

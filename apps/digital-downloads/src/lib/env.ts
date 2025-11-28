@@ -35,11 +35,18 @@ export const env = createEnv({
     AWS_SECRET_ACCESS_KEY: z.string(),
     APPSTORE_URL: z.string().optional(),
     APP_NAME: z.string().optional().default("Digital Downloads"),
-    DOWNLOAD_TOKEN_EXPIRY_HOURS: z.coerce.number().optional().default(72),
-    MAX_DOWNLOAD_LIMIT: z.coerce.number().optional().default(5),
+    DOWNLOAD_TOKEN_EXPIRY_HOURS: z
+      .string()
+      .default("")
+      .transform((val) => (val === "" ? null : Number(val))),
+    MAX_DOWNLOAD_LIMIT: z
+      .string()
+      .default("")
+      .transform((val) => (val === "" ? null : Number(val))),
     // Email configuration
     EMAIL_ENABLED: booleanSchema.optional().default("false"),
     EMAIL_FROM: z.string().email().optional(),
+    ADMIN_EMAIL: z.string().email().optional(), // Admin email for Cortex order notifications
     // SMTP configuration
     SMTP_HOST: z.string().optional(),
     SMTP_PORT: z.coerce.number().optional().default(587),
@@ -82,6 +89,7 @@ export const env = createEnv({
     // Email configuration
     EMAIL_ENABLED: process.env.EMAIL_ENABLED,
     EMAIL_FROM: process.env.EMAIL_FROM,
+    ADMIN_EMAIL: process.env.ADMIN_EMAIL,
     SMTP_HOST: process.env.SMTP_HOST,
     SMTP_PORT: process.env.SMTP_PORT,
     SMTP_USER: process.env.SMTP_USER,

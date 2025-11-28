@@ -45,12 +45,11 @@ export function generateOrderConfirmationEmail(input: OrderConfirmationTemplateI
             padding-bottom: 24px;
             margin-bottom: 32px;
         }
-        .brand {
-            color: #dc2626;
-            font-size: 28px;
-            font-weight: 700;
-            margin: 0 0 8px 0;
-            letter-spacing: -0.5px;
+        .logo {
+            max-width: 200px;
+            height: auto;
+            margin: 0 auto 16px auto;
+            display: block;
         }
         h1 {
             color: #1a1a1a;
@@ -179,7 +178,7 @@ export function generateOrderConfirmationEmail(input: OrderConfirmationTemplateI
 <body>
     <div class="container">
         <div class="header">
-            <div class="brand">SONIC DRIVE STUDIO</div>
+            <img class="logo" src="https://cdn.sonicdrivestudio.com/Logo%20complete-min.png" alt="Sonic Drive Studio">
             <h1>Your Digital Downloads Are Ready!</h1>
             <p class="order-number">Order #${orderNumber}</p>
         </div>
@@ -193,38 +192,56 @@ export function generateOrderConfirmationEmail(input: OrderConfirmationTemplateI
             <div class="downloads-header">Your Digital Downloads</div>
 
             ${downloadTokens
-              .map(
-                (token) => `
+              .map((token) => {
+                const partInfo =
+                  token.totalFiles && token.totalFiles > 1 && token.fileIndex
+                    ? ` - Part ${token.fileIndex} of ${token.totalFiles}`
+                    : "";
+                const fileName =
+                  token.fileName && token.totalFiles && token.totalFiles > 1
+                    ? `<br/><small style="color: #6b7280; font-size: 13px; margin-top: 4px; display: block;">File: ${token.fileName}</small>`
+                    : "";
+
+                return `
                 <div class="download-item">
-                    <div class="product-name">${token.productName}</div>
+                    <div class="product-name">${token.productName}${partInfo}</div>
                     ${
                       token.variantName
                         ? `<div class="variant-name">${token.variantName}</div>`
                         : ""
                     }
+                    ${fileName}
                     <a href="${appBaseUrl}/api/downloads/${token.token}" class="download-button">
                         Download Now
                     </a>
                     <div class="expiry-info">
-                        Valid until ${new Date(token.expiresAt).toLocaleDateString("en-US", {
-                          year: "numeric",
-                          month: "long",
-                          day: "numeric",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })} • Maximum ${token.maxDownloads} downloads
+                        ${
+                          token.expiresAt
+                            ? `Valid until ${new Date(token.expiresAt).toLocaleDateString("en-US", {
+                                year: "numeric",
+                                month: "long",
+                                day: "numeric",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })}`
+                            : "Never expires"
+                        } • ${token.maxDownloads !== undefined && token.maxDownloads !== null ? `Maximum ${token.maxDownloads} downloads` : "Unlimited downloads"}
                     </div>
                 </div>
-            `,
-              )
+            `;
+              })
               .join("")}
         </div>
 
-        <div class="info-box">
+        ${
+          downloadTokens[0].expiresAt
+            ? `<div class="info-box">
             <p><strong>⏰ Important:</strong> Download links expire after ${Math.round(
               (new Date(downloadTokens[0].expiresAt).getTime() - Date.now()) / (1000 * 60 * 60),
             )} hours. Make sure to download your files before they expire!</p>
-        </div>
+        </div>`
+            : ""
+        }
 
         <div class="signature">
             <p>Cheers,</p>
@@ -263,25 +280,33 @@ ${index + 1}. ${token.productName}${token.variantName ? ` - ${token.variantName}
    Download Link:
    ${appBaseUrl}/api/downloads/${token.token}
 
-   Valid until: ${new Date(token.expiresAt).toLocaleDateString("en-US", {
-     year: "numeric",
-     month: "long",
-     day: "numeric",
-     hour: "2-digit",
-     minute: "2-digit",
-   })}
-   Maximum downloads: ${token.maxDownloads}
+   ${
+     token.expiresAt
+       ? `Valid until: ${new Date(token.expiresAt).toLocaleDateString("en-US", {
+           year: "numeric",
+           month: "long",
+           day: "numeric",
+           hour: "2-digit",
+           minute: "2-digit",
+         })}`
+       : "Never expires"
+   }
+   ${token.maxDownloads !== undefined && token.maxDownloads !== null ? `Maximum downloads: ${token.maxDownloads}` : "Unlimited downloads"}
 `,
   )
   .join("\n")}
 
-═══════════════════════════════════════════════════
+${
+  downloadTokens[0].expiresAt
+    ? `═══════════════════════════════════════════════════
 ⏰ IMPORTANT: Download links expire after ${Math.round(
-    (new Date(downloadTokens[0].expiresAt).getTime() - Date.now()) / (1000 * 60 * 60),
-  )} hours.
+        (new Date(downloadTokens[0].expiresAt).getTime() - Date.now()) / (1000 * 60 * 60),
+      )} hours.
 Make sure to download your files before they expire!
 ═══════════════════════════════════════════════════
-
+`
+    : ""
+}
 Cheers,
 
 Jon

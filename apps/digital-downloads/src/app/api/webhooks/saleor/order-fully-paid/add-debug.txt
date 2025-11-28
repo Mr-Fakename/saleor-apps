@@ -1,0 +1,10 @@
+        console.log("=".repeat(80));
+        console.log(\`WEBHOOK DEBUG - Order Line \${index + 1}\`);
+        console.log("Product:", line.productName);
+        console.log("Variant:", line.variantName);
+        console.log("\nVARIANT ATTRIBUTES:");
+        console.log(JSON.stringify(line.variant?.attributes, null, 2));
+        console.log("\nPRODUCT ATTRIBUTES:");
+        console.log(JSON.stringify(line.variant?.product?.attributes, null, 2));
+        console.log("=".repeat(80));
+

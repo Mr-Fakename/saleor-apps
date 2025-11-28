@@ -32,7 +32,7 @@ const handler = createManifestHandler({
        * Can set custom name, e.g. in Development to recognize the app
        */
       name: env.APP_NAME,
-      permissions: ["MANAGE_ORDERS"],
+      permissions: ["MANAGE_ORDERS", "MANAGE_PRODUCTS"],
       requiredSaleorVersion: ">=3.21 <4",
       supportUrl: "https://saleor.io/discord",
       tokenTargetUrl: `${apiBaseUrl}/api/register`,
