@@ -271,8 +271,8 @@ export function generateCortexAdminNotificationEmail(input: CortexAdminNotificat
             <ol class="action-list">
                 <li>Log into the Cortex Cloud admin panel</li>
                 <li><strong>Add user to Cortex Cloud:</strong>
-                    <span style="background-color: #fef3c7; padding: 4px 8px; border-radius: 4px; font-family: 'Courier New', monospace; font-weight: 700; color: #92400e; font-size: 15px;">
-                        ${cortexCloudUsername || customerEmail}
+                    <span style="background-color: ${cortexCloudUsername ? "#fef3c7" : "#fee2e2"}; padding: 4px 8px; border-radius: 4px; font-family: 'Courier New', monospace; font-weight: 700; color: ${cortexCloudUsername ? "#92400e" : "#dc2626"}; font-size: 15px;">
+                        ${cortexCloudUsername || "⚠️ ERROR: Cortex username not provided"}
                     </span>
                 </li>
                 <li>Grant access to the purchased Cortex products listed above</li>
@@ -331,7 +331,7 @@ ${index + 1}. ${product.productName}
 ═══════════════════════════════════════════════════
 1. Log into the Cortex Cloud admin panel
 2. Add user to Cortex Cloud:
-   >>> ${cortexCloudUsername || customerEmail} <<<
+   >>> ${cortexCloudUsername || "⚠️ ERROR: Cortex username not provided"} <<<
 3. Grant access to the purchased Cortex products listed above
 4. Verify the customer can access their products
 
