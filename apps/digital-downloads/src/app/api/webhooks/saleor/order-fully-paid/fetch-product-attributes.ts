@@ -101,25 +101,30 @@ export async function fetchProductAttributes(
     const attributes: ProductAttributeData[] = [];
 
     // Helper to add a file attribute if it exists
+    // SelectedAttribute returns { attribute, values: [{ id, name, slug, file: { url, contentType } }] }
     const addFileAttribute = (fileAttr: any, partNumber: number) => {
-      if (fileAttr?.attribute && fileAttr?.value?.url) {
-        // Convert single value to values array format for compatibility
-        attributes.push({
-          attribute: {
-            id: fileAttr.attribute.id,
-            name: fileAttr.attribute.name || fileAttr.attribute.slug,
-            slug: fileAttr.attribute.slug,
-          },
-          values: [{
-            id: `${fileAttr.attribute.id}-value`,
-            name: fileAttr.value.url.split("/").pop() || `File Part ${partNumber}`,
-            slug: fileAttr.attribute.slug,
-            file: {
-              url: fileAttr.value.url,
-              contentType: fileAttr.value.contentType || null,
+      if (fileAttr?.attribute && fileAttr?.values?.length > 0) {
+        // Filter values that have file URLs
+        const valuesWithFiles = fileAttr.values.filter((v: any) => v?.file?.url);
+
+        if (valuesWithFiles.length > 0) {
+          attributes.push({
+            attribute: {
+              id: fileAttr.attribute.id,
+              name: fileAttr.attribute.name || fileAttr.attribute.slug,
+              slug: fileAttr.attribute.slug,
             },
-          }],
-        });
+            values: valuesWithFiles.map((v: any) => ({
+              id: v.id,
+              name: v.name || v.file?.url?.split("/").pop() || `File Part ${partNumber}`,
+              slug: v.slug || fileAttr.attribute.slug,
+              file: {
+                url: v.file.url,
+                contentType: v.file.contentType || null,
+              },
+            })),
+          });
+        }
       }
     };
 

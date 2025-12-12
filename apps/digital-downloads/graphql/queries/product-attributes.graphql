@@ -14,68 +14,83 @@ query GetProductAttributes($productId: ID!) {
       key
       value
     }
-    # Query each file attribute part separately using assignedAttribute
-    # This API is more reliable for FILE-type attributes than the attributes field
-    files: assignedAttribute(slug: "files") {
-      ... on AssignedFileAttribute {
-        attribute {
-          id
-          slug
-          name
-        }
-        value {
+    # Query each file attribute part separately using attribute(slug: ...)
+    # This returns SelectedAttribute with values containing file info
+    files: attribute(slug: "files") {
+      attribute {
+        id
+        slug
+        name
+      }
+      values {
+        id
+        name
+        slug
+        file {
           url
           contentType
         }
       }
     }
-    files_2: assignedAttribute(slug: "files-part-2") {
-      ... on AssignedFileAttribute {
-        attribute {
-          id
-          slug
-          name
-        }
-        value {
+    files_2: attribute(slug: "files-part-2") {
+      attribute {
+        id
+        slug
+        name
+      }
+      values {
+        id
+        name
+        slug
+        file {
           url
           contentType
         }
       }
     }
-    files_3: assignedAttribute(slug: "files-part-3") {
-      ... on AssignedFileAttribute {
-        attribute {
-          id
-          slug
-          name
-        }
-        value {
+    files_3: attribute(slug: "files-part-3") {
+      attribute {
+        id
+        slug
+        name
+      }
+      values {
+        id
+        name
+        slug
+        file {
           url
           contentType
         }
       }
     }
-    files_4: assignedAttribute(slug: "files-part-4") {
-      ... on AssignedFileAttribute {
-        attribute {
-          id
-          slug
-          name
-        }
-        value {
+    files_4: attribute(slug: "files-part-4") {
+      attribute {
+        id
+        slug
+        name
+      }
+      values {
+        id
+        name
+        slug
+        file {
           url
           contentType
         }
       }
     }
-    files_5: assignedAttribute(slug: "files-part-5") {
-      ... on AssignedFileAttribute {
-        attribute {
-          id
-          slug
-          name
-        }
-        value {
+    files_5: attribute(slug: "files-part-5") {
+      attribute {
+        id
+        slug
+        name
+      }
+      values {
+        id
+        name
+        slug
+        file {
           url
           contentType
         }
