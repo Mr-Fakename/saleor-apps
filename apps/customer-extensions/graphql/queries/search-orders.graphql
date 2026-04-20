@@ -1,0 +1,18 @@
+query SearchOrders($filter: OrderFilterInput, $first: Int!) {
+  orders(filter: $filter, first: $first, sortBy: { field: CREATED_AT, direction: DESC }) {
+    edges {
+      node {
+        id
+        number
+        created
+        status
+        user {
+          id
+          email
+          firstName
+          lastName
+        }
+      }
+    }
+  }
+}

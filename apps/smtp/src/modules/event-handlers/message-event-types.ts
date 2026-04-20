@@ -4,6 +4,11 @@ export const messageEventTypes = [
   "ACCOUNT_CONFIRMATION",
   "ACCOUNT_DELETE",
   "ACCOUNT_PASSWORD_RESET",
+  "ACCOUNT_SET_CUSTOMER_PASSWORD",
+  "ACCOUNT_SET_STAFF_PASSWORD",
+  "ACCOUNT_STAFF_RESET_PASSWORD",
+  "CSV_EXPORT_SUCCESS",
+  "CSV_EXPORT_FAILED",
   "GIFT_CARD_SENT",
   "INVOICE_SENT",
   "ORDER_CANCELLED",
@@ -13,6 +18,7 @@ export const messageEventTypes = [
   "ORDER_FULFILLMENT_UPDATE",
   "ORDER_FULLY_PAID",
   "ORDER_REFUNDED",
+  "STAFF_ORDER_CONFIRMATION",
 ] as const;
 
 export type MessageEventTypes = (typeof messageEventTypes)[number];
@@ -23,6 +29,11 @@ export const messageEventTypesLabels: Record<MessageEventTypes, string> = {
   ACCOUNT_CONFIRMATION: "Customer account confirmation",
   ACCOUNT_DELETE: "Customer account delete request",
   ACCOUNT_PASSWORD_RESET: "Customer account password reset request",
+  ACCOUNT_SET_CUSTOMER_PASSWORD: "Customer account set password",
+  ACCOUNT_SET_STAFF_PASSWORD: "Staff account set password",
+  ACCOUNT_STAFF_RESET_PASSWORD: "Staff account password reset",
+  CSV_EXPORT_SUCCESS: "CSV export completed",
+  CSV_EXPORT_FAILED: "CSV export failed",
   GIFT_CARD_SENT: "Gift card sent",
   INVOICE_SENT: "Invoice sent",
   ORDER_CANCELLED: "Order cancelled",
@@ -32,4 +43,5 @@ export const messageEventTypesLabels: Record<MessageEventTypes, string> = {
   ORDER_FULFILLMENT_UPDATE: "Order fulfillment updated",
   ORDER_FULLY_PAID: "Order fully paid",
   ORDER_REFUNDED: "Order refunded",
+  STAFF_ORDER_CONFIRMATION: "Staff order confirmation",
 };

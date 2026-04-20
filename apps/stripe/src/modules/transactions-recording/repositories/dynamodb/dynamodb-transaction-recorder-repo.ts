@@ -94,6 +94,62 @@ export class DynamoDBTransactionRecorderRepo implements TransactionRecorderRepo 
     }
   }
 
+  /**
+   * Upsert a transaction record - creates if not exists, updates if exists.
+   * Used when updating an existing PaymentIntent (e.g., when amount changes).
+   */
+  async upsertTransaction(
+    accessPattern: TransactionRecorderRepoAccess,
+    transaction: RecordedTransaction,
+  ): Promise<Result<null, TransactionRecorderError>> {
+    try {
+      this.logger.debug("Upserting Transaction to DynamoDB", { transaction });
+
+      // Use PutItem without condition to allow overwrite
+      const operation = this.entity.build(PutItemCommand).item({
+        PK: DynamoDbRecordedTransaction.accessPattern.getPK({
+          appId: accessPattern.appId,
+          saleorApiUrl: accessPattern.saleorApiUrl,
+        }),
+        SK: DynamoDbRecordedTransaction.accessPattern.getSKforSpecificItem({
+          paymentIntentId: transaction.stripePaymentIntentId,
+        }),
+        paymentIntentId: transaction.stripePaymentIntentId,
+        selectedPaymentMethod: transaction.selectedPaymentMethod,
+        saleorTransactionId: transaction.saleorTransactionId,
+        saleorTransactionFlow: transaction.saleorTransactionFlow,
+        resolvedTransactionFlow: transaction.resolvedTransactionFlow,
+      });
+
+      const result = await operation.send();
+
+      if (result.$metadata.httpStatusCode === 200) {
+        this.logger.debug("Successfully upserted transaction to DynamoDB", {
+          transaction,
+        });
+
+        return ok(null);
+      }
+
+      throw new BaseError("Unexpected response from DynamoDB: " + result.$metadata.httpStatusCode, {
+        cause: result,
+      });
+    } catch (e) {
+      this.logger.debug("Failed to upsert transaction to DynamoDB", {
+        error: e,
+      });
+
+      return err(
+        new TransactionRecorderError.FailedWritingTransactionError(
+          "Failed to upsert transaction to DynamoDB",
+          {
+            cause: e,
+          },
+        ),
+      );
+    }
+  }
+
   async getTransactionByStripePaymentIntentId(
     accessPattern: TransactionRecorderRepoAccess,
     id: StripePaymentIntentId,

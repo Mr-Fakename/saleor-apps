@@ -23,14 +23,12 @@ export default wrapWithLoggerContext(
               default: `${apiBaseURL}/logo.png`,
             },
           },
-          dataPrivacyUrl: "https://saleor.io/legal/privacy/",
           extensions: [
             /**
              * Optionally, extend Dashboard with custom UIs
              * https://docs.saleor.io/developer/extending/apps/extending-dashboard-with-apps
              */
           ],
-          homepageUrl: "https://github.com/saleor/apps",
           id: "saleor.app.search",
           name: "Search",
           permissions: [
@@ -41,11 +39,10 @@ export default wrapWithLoggerContext(
             "MANAGE_PRODUCTS",
             "MANAGE_PRODUCT_TYPES_AND_ATTRIBUTES",
           ],
-          supportUrl: "https://github.com/saleor/apps/discussions",
           tokenTargetUrl: `${apiBaseURL}/api/register`,
           version: packageJson.version,
           webhooks: appWebhooks.map((w) => w.getWebhookManifest(apiBaseURL)),
-          author: "Saleor Commerce",
+          author: "Daybreak Development",
         };
 
         return manifest;

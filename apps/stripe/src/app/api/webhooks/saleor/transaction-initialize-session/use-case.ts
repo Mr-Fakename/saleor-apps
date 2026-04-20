@@ -297,7 +297,122 @@ export class TransactionInitializeSessionUseCase {
     const resolvedTransactionFlow =
       selectedPaymentMethod.getResolvedTransactionFlow(saleorTransactionFlow);
 
-    // Check for existing payment intents for this checkout
+    // Check if storefront passed an existing PaymentIntent ID to update
+    // This avoids Stripe's search API latency when the checkout amount changes
+    const existingPaymentIntentIdFromStorefront = eventDataResult.value.existingPaymentIntentId;
+
+    if (existingPaymentIntentIdFromStorefront) {
+      this.logger.info("Storefront provided existing PaymentIntent ID, attempting to update", {
+        existingPaymentIntentId: existingPaymentIntentIdFromStorefront,
+      });
+
+      const requestedAmount = StripeMoney.createFromSaleorAmount({
+        amount: event.action.amount,
+        currency: event.action.currency,
+      });
+
+      if (requestedAmount.isOk()) {
+        // Update the existing PaymentIntent directly
+        const updateResult = await stripePaymentIntentsApi.updatePaymentIntent({
+          id: existingPaymentIntentIdFromStorefront as StripePaymentIntentId,
+          stripeMoney: requestedAmount.value,
+          metadata: {
+            saleor_transaction_id: createSaleorTransactionId(event.transaction.id),
+          },
+          idempotencyKey: `update_direct_${event.idempotencyKey}`,
+        });
+
+        if (updateResult.isOk()) {
+          const updatedPI = updateResult.value;
+
+          this.logger.info("Successfully updated PaymentIntent via storefront-provided ID", {
+            paymentIntentId: updatedPI.id,
+            amount: updatedPI.amount,
+          });
+
+          const mappedResponseResult = this.mapStripePaymentIntentToWebhookResponse(updatedPI);
+
+          if (mappedResponseResult.isOk()) {
+            const [saleorMoney, stripePaymentIntentId, stripeClientSecret, stripeStatus] =
+              mappedResponseResult.value;
+
+            // Upsert the transaction record
+            const recordedTransaction = new RecordedTransaction({
+              saleorTransactionId: createSaleorTransactionId(event.transaction.id),
+              stripePaymentIntentId,
+              saleorTransactionFlow: saleorTransactionFlow,
+              resolvedTransactionFlow: resolvedTransactionFlow,
+              selectedPaymentMethod: selectedPaymentMethod.type,
+            });
+
+            const recordResult = await this.transactionRecorder.upsertTransaction(
+              {
+                saleorApiUrl: args.saleorApiUrl,
+                appId: args.appId,
+              },
+              recordedTransaction,
+            );
+
+            if (recordResult.isErr()) {
+              this.logger.error("Failed to upsert transaction for direct-updated PI", {
+                error: recordResult.error,
+                paymentIntentId: updatedPI.id,
+              });
+
+              return err(
+                new BrokenAppResponse(appContextContainer.getContextValue(), recordResult.error),
+              );
+            }
+
+            // Update Saleor transaction with pspReference
+            const updateTransactionResult = await this.updateTransactionWithPspReference({
+              transactionId: event.transaction.id,
+              stripePaymentIntentId,
+              saleorApiUrl: args.saleorApiUrl,
+              appId: args.appId,
+            });
+
+            if (updateTransactionResult.isErr()) {
+              this.logger.error("Failed to update transaction with pspReference (direct update)", {
+                error: updateTransactionResult.error,
+                transactionId: event.transaction.id,
+                pspReference: stripePaymentIntentId,
+              });
+
+              return err(
+                new BrokenAppResponse(
+                  appContextContainer.getContextValue(),
+                  updateTransactionResult.error,
+                ),
+              );
+            }
+
+            const transactionResult = this.resolveOkTransactionResult({
+              transactionFlow: resolvedTransactionFlow,
+              stripeStatus,
+            });
+
+            return ok(
+              new TransactionInitializeSessionUseCaseResponses.Success({
+                saleorMoney,
+                stripePaymentIntentId,
+                transactionResult,
+                stripeClientSecret,
+                appContext: appContextContainer.getContextValue(),
+              }),
+            );
+          }
+        } else {
+          this.logger.warn("Failed to update PaymentIntent via storefront-provided ID, will search/create", {
+            existingPaymentIntentId: existingPaymentIntentIdFromStorefront,
+            error: updateResult.error,
+          });
+        }
+      }
+    }
+
+    // Check for existing payment intents for this checkout via Stripe search API
+    // (fallback if storefront didn't provide an ID or update failed)
     const existingPaymentIntentsResult =
       await stripePaymentIntentsApi.searchPaymentIntentsByCheckout({
         checkoutId: event.sourceObject.id,
@@ -397,7 +512,140 @@ export class TransactionInitializeSessionUseCase {
           }
         }
 
-        // Cancel all existing payment intents if we can't reuse any
+        // STRIPE BEST PRACTICE: If we have an existing PaymentIntent with different amount,
+        // UPDATE it instead of canceling and creating a new one.
+        // This preserves the clientSecret so the storefront doesn't need to remount Elements.
+        const updatablePI = existingPaymentIntentsResult.value.find(
+          (pi) => pi.status === "requires_payment_method" && pi.currency === requestedAmount.value.currency,
+        );
+
+        if (updatablePI) {
+          this.logger.info("Updating existing payment intent with new amount", {
+            paymentIntentId: updatablePI.id,
+            oldAmount: updatablePI.amount,
+            newAmount: requestedAmount.value.amount,
+          });
+
+          // Update the PaymentIntent's amount
+          const updateResult = await stripePaymentIntentsApi.updatePaymentIntent({
+            id: updatablePI.id as StripePaymentIntentId,
+            stripeMoney: requestedAmount.value,
+            metadata: {
+              saleor_transaction_id: createSaleorTransactionId(event.transaction.id),
+            },
+            idempotencyKey: `update_${event.idempotencyKey}`,
+          });
+
+          if (updateResult.isOk()) {
+            const updatedPI = updateResult.value;
+
+            this.logger.debug("Successfully updated payment intent amount", {
+              paymentIntentId: updatedPI.id,
+              newAmount: updatedPI.amount,
+            });
+
+            const mappedResponseResult = this.mapStripePaymentIntentToWebhookResponse(updatedPI);
+
+            if (mappedResponseResult.isOk()) {
+              const [saleorMoney, stripePaymentIntentId, stripeClientSecret, stripeStatus] =
+                mappedResponseResult.value;
+
+              // Upsert the transaction - use upsert because the PaymentIntent may already have
+              // a record from a previous Saleor transaction (before the amount was updated)
+              const recordedTransaction = new RecordedTransaction({
+                saleorTransactionId: createSaleorTransactionId(event.transaction.id),
+                stripePaymentIntentId,
+                saleorTransactionFlow: saleorTransactionFlow,
+                resolvedTransactionFlow: resolvedTransactionFlow,
+                selectedPaymentMethod: selectedPaymentMethod.type,
+              });
+
+              const recordResult = await this.transactionRecorder.upsertTransaction(
+                {
+                  saleorApiUrl: args.saleorApiUrl,
+                  appId: args.appId,
+                },
+                recordedTransaction,
+              );
+
+              if (recordResult.isErr()) {
+                this.logger.error("Failed to upsert transaction for updated PI", {
+                  error: recordResult.error,
+                  paymentIntentId: updatedPI.id,
+                });
+
+                return err(
+                  new BrokenAppResponse(appContextContainer.getContextValue(), recordResult.error),
+                );
+              }
+
+              this.logger.info("Updated and reused existing payment intent", {
+                paymentIntentId: updatedPI.id,
+                transaction: recordedTransaction,
+              });
+
+              // Update Saleor transaction with the Stripe PaymentIntent ID as pspReference
+              const updateTransactionResult = await this.updateTransactionWithPspReference({
+                transactionId: event.transaction.id,
+                stripePaymentIntentId,
+                saleorApiUrl: args.saleorApiUrl,
+                appId: args.appId,
+              });
+
+              if (updateTransactionResult.isErr()) {
+                this.logger.error("Failed to update transaction with pspReference (updated PI)", {
+                  error: updateTransactionResult.error,
+                  transactionId: event.transaction.id,
+                  pspReference: stripePaymentIntentId,
+                });
+
+                return err(
+                  new BrokenAppResponse(
+                    appContextContainer.getContextValue(),
+                    updateTransactionResult.error,
+                  ),
+                );
+              }
+
+              // Cancel any other existing payment intents for this checkout
+              for (const existingPI of existingPaymentIntentsResult.value) {
+                if (existingPI.id !== updatedPI.id) {
+                  const cancelResult = await stripePaymentIntentsApi.cancelPaymentIntent({
+                    id: existingPI.id as StripePaymentIntentId,
+                  });
+
+                  if (cancelResult.isOk()) {
+                    this.logger.debug("Canceled extra payment intent", {
+                      paymentIntentId: existingPI.id,
+                    });
+                  }
+                }
+              }
+
+              const transactionResult = this.resolveOkTransactionResult({
+                transactionFlow: resolvedTransactionFlow,
+                stripeStatus,
+              });
+
+              return ok(
+                new TransactionInitializeSessionUseCaseResponses.Success({
+                  saleorMoney,
+                  stripePaymentIntentId,
+                  transactionResult,
+                  stripeClientSecret,
+                  appContext: appContextContainer.getContextValue(),
+                }),
+              );
+            }
+          } else {
+            this.logger.warn("Failed to update payment intent, will create new one", {
+              paymentIntentId: updatablePI.id,
+              error: updateResult.error,
+            });
+          }
+        }
+
+        // Fallback: Cancel all existing payment intents if we can't reuse or update any
         for (const existingPI of existingPaymentIntentsResult.value) {
           const cancelResult = await stripePaymentIntentsApi.cancelPaymentIntent({
             id: existingPI.id as StripePaymentIntentId,

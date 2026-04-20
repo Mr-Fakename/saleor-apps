@@ -44,3 +44,6 @@ yarn-error.log*
 .saleor-app-auth.json
 .DS_Store
 *.pem
+
+# claude
+.claude/settings.local.json

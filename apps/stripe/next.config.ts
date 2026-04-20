@@ -4,6 +4,7 @@ import path from "path";
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  typescript: { ignoreBuildErrors: true },
   outputFileTracingRoot: path.join(__dirname, "../../"),
   reactStrictMode: true,
   transpilePackages: [

@@ -7,7 +7,13 @@ export const notifyEventMapping: Record<string, MessageEventTypes> = {
   account_password_reset: "ACCOUNT_PASSWORD_RESET",
   account_change_email_request: "ACCOUNT_CHANGE_EMAIL_REQUEST",
   account_change_email_confirm: "ACCOUNT_CHANGE_EMAIL_CONFIRM",
+  account_set_customer_password: "ACCOUNT_SET_CUSTOMER_PASSWORD",
+  account_set_staff_password: "ACCOUNT_SET_STAFF_PASSWORD",
+  account_staff_reset_password: "ACCOUNT_STAFF_RESET_PASSWORD",
+  csv_export_success: "CSV_EXPORT_SUCCESS",
+  csv_export_failed: "CSV_EXPORT_FAILED",
   order_fulfillment_update: "ORDER_FULFILLMENT_UPDATE",
+  staff_order_confirmation: "STAFF_ORDER_CONFIRMATION",
 };
 
 interface IssuingPrincipal {
@@ -47,6 +53,30 @@ export type NotifySubscriptionPayload = {
   | {
       notify_event: "order_fulfillment_update";
       payload: NotifyPayloadFulfillmentUpdate;
+    }
+  | {
+      notify_event: "account_set_customer_password";
+      payload: NotifyPayloadAccountSetPassword;
+    }
+  | {
+      notify_event: "account_set_staff_password";
+      payload: NotifyPayloadAccountSetPassword;
+    }
+  | {
+      notify_event: "account_staff_reset_password";
+      payload: NotifyPayloadAccountPasswordReset;
+    }
+  | {
+      notify_event: "csv_export_success";
+      payload: NotifyPayloadCsvExport;
+    }
+  | {
+      notify_event: "csv_export_failed";
+      payload: NotifyPayloadCsvExport;
+    }
+  | {
+      notify_event: "staff_order_confirmation";
+      payload: NotifyPayloadStaffOrderConfirmation;
     }
 );
 
@@ -118,6 +148,36 @@ export interface NotifyPayloadFulfillmentUpdate {
   recipient_email: string;
   site_name: string;
   token: string;
+}
+
+export interface NotifyPayloadAccountSetPassword {
+  channel_slug: string;
+  domain: string;
+  logo_url: string;
+  password_set_url: string;
+  recipient_email: string;
+  site_name: string;
+  token: string;
+  user: User;
+}
+
+export interface NotifyPayloadCsvExport {
+  channel_slug: string;
+  csv_link: string;
+  domain: string;
+  logo_url: string;
+  recipient_email: string;
+  site_name: string;
+}
+
+export interface NotifyPayloadStaffOrderConfirmation {
+  channel_slug: string;
+  domain: string;
+  logo_url: string;
+  order: Order;
+  recipient_email: string;
+  recipient_list: string[];
+  site_name: string;
 }
 
 interface User {

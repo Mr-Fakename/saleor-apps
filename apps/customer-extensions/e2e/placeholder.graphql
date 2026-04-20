@@ -1,0 +1,6 @@
+# Placeholder GraphQL query for e2e tests
+# Add actual test queries here when writing E2E tests
+
+query Placeholder {
+  __typename
+}

@@ -21,8 +21,13 @@ const TransactionInitializeEventDataSchema = z
       USBankAccountPaymentMethod.TransactionInitializeSchema,
       SepaDebitPaymentMethod.TransactionInitializeSchema,
     ]),
+    /**
+     * Optional: Pass the existing PaymentIntent ID to update instead of creating a new one.
+     * This avoids Stripe's search API latency when the checkout amount changes.
+     * The storefront should pass this when it already has a PaymentIntent for the checkout.
+     */
+    existingPaymentIntentId: z.string().startsWith("pi_").optional(),
   })
-  .strict()
   .brand("TransactionInitializeRequestData");
 
 export const ParseErrorPublicCode = "ParseError" as const;

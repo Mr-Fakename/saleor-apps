@@ -20,18 +20,15 @@ const handler = wrapWithLoggerContext(
         return {
           about: "Klaviyo integration allows sending Klaviyo notifications on Saleor events.",
           appUrl: iframeBaseUrl,
-          author: "Saleor Commerce",
+          author: "Daybreak Development",
           brand: {
             logo: {
               default: `${apiBaseURL}/logo.png`,
             },
           },
-          dataPrivacyUrl: "https://saleor.io/legal/privacy/",
-          homepageUrl: "https://github.com/saleor/apps",
           id: "saleor.app.klaviyo",
           name: "Klaviyo",
           permissions: ["MANAGE_USERS", "MANAGE_ORDERS"],
-          supportUrl: "https://github.com/saleor/apps/discussions",
           tokenTargetUrl: `${apiBaseURL}/api/register`,
           version: pkg.version,
           webhooks: [

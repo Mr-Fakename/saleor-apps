@@ -47,13 +47,9 @@ export const env = createEnv({
     EMAIL_ENABLED: booleanSchema.optional().default("false"),
     EMAIL_FROM: z.string().email().optional(),
     ADMIN_EMAIL: z.string().email().optional(), // Admin email for Cortex order notifications
-    // SMTP configuration
-    SMTP_HOST: z.string().optional(),
-    SMTP_PORT: z.coerce.number().optional().default(587),
-    SMTP_USER: z.string().optional(),
-    SMTP_PASSWORD: z.string().optional(),
-    // SendGrid configuration (alternative to SMTP)
-    SENDGRID_API_KEY: z.string().optional(),
+    // SMTP App connection (emails sent via SMTP App's /api/send endpoint)
+    SMTP_APP_URL: z.string().optional(),
+    SMTP_APP_API_KEY: z.string().optional(),
   },
   shared: {
     NODE_ENV: z.enum(["development", "production", "test"]).optional().default("development"),
@@ -90,11 +86,8 @@ export const env = createEnv({
     EMAIL_ENABLED: process.env.EMAIL_ENABLED,
     EMAIL_FROM: process.env.EMAIL_FROM,
     ADMIN_EMAIL: process.env.ADMIN_EMAIL,
-    SMTP_HOST: process.env.SMTP_HOST,
-    SMTP_PORT: process.env.SMTP_PORT,
-    SMTP_USER: process.env.SMTP_USER,
-    SMTP_PASSWORD: process.env.SMTP_PASSWORD,
-    SENDGRID_API_KEY: process.env.SENDGRID_API_KEY,
+    SMTP_APP_URL: process.env.SMTP_APP_URL,
+    SMTP_APP_API_KEY: process.env.SMTP_APP_API_KEY,
   },
   isServer: typeof window === "undefined" || process.env.NODE_ENV === "test",
   onValidationError(issues) {

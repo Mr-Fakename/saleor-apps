@@ -19,25 +19,22 @@ const handler = createManifestHandler({
       about:
         "CMS App is a multi-integration app that connects Saleor with popular Content Management Systems.",
       appUrl: iframeBaseUrl,
-      author: "Saleor Commerce",
+      author: "Daybreak Development",
       brand: {
         logo: {
           default: `${apiBaseURL}/logo.png`,
         },
       },
-      dataPrivacyUrl: "https://saleor.io/legal/privacy/",
       extensions: [
         /**
          * Optionally, extend Dashboard with custom UIs
          * https://docs.saleor.io/developer/extending/apps/extending-dashboard-with-apps
          */
       ],
-      homepageUrl: "https://github.com/saleor/apps",
       id: "saleor.app.cms2",
       name: "CMS",
       permissions: ["MANAGE_PRODUCTS"],
       requiredSaleorVersion: ">=3.10 <4",
-      supportUrl: "https://github.com/saleor/apps/discussions",
       tokenTargetUrl: `${apiBaseURL}/api/register`,
       version: packageJson.version,
       /*

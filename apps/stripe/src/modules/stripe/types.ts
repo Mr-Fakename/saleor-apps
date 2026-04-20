@@ -48,6 +48,13 @@ export interface CreatePaymentIntentArgs {
   metadata?: AllowedStripeObjectMetadata;
 }
 
+export interface UpdatePaymentIntentArgs {
+  id: StripePaymentIntentId;
+  stripeMoney: StripeMoney;
+  metadata?: AllowedStripeObjectMetadata;
+  idempotencyKey?: string;
+}
+
 export interface IStripePaymentIntentsApi {
   createPaymentIntent(
     args: CreatePaymentIntentArgs,
@@ -55,6 +62,15 @@ export interface IStripePaymentIntentsApi {
   getPaymentIntent(args: {
     id: StripePaymentIntentId;
   }): Promise<Result<Stripe.PaymentIntent, unknown>>;
+  /**
+   * Update an existing PaymentIntent's amount and/or metadata.
+   * According to Stripe best practices, when the checkout amount changes,
+   * update the existing PaymentIntent instead of creating a new one.
+   * The clientSecret remains valid after the update.
+   */
+  updatePaymentIntent(
+    args: UpdatePaymentIntentArgs,
+  ): Promise<Result<Stripe.PaymentIntent, unknown>>;
   capturePaymentIntent(args: {
     id: StripePaymentIntentId;
   }): Promise<Result<Stripe.PaymentIntent, unknown>>;

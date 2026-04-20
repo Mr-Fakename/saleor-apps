@@ -59,6 +59,16 @@ export interface TransactionRecorderRepo {
     transaction: RecordedTransaction,
   ): Promise<Result<null, TransactionRecorderError>>;
 
+  /**
+   * Upsert a transaction record - creates if not exists, updates if exists.
+   * Used when updating an existing PaymentIntent (e.g., when amount changes).
+   * The PaymentIntent may already have a record from a previous Saleor transaction.
+   */
+  upsertTransaction(
+    accessPattern: TransactionRecorderRepoAccess,
+    transaction: RecordedTransaction,
+  ): Promise<Result<null, TransactionRecorderError>>;
+
   getTransactionByStripePaymentIntentId(
     accessPattern: TransactionRecorderRepoAccess,
     id: StripePaymentIntentId,

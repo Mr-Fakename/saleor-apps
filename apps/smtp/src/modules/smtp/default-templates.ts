@@ -376,12 +376,120 @@ const defaultOrderFulfillmentUpdatedMjmlTemplate = `<mjml>
   </mj-body>
 </mjml>`;
 
+const defaultAccountSetCustomerPasswordMjmlTemplate = `<mjml>
+  <mj-body>
+    <mj-section>
+      <mj-column>
+        <mj-text font-size="16px">
+          Hi {{user.first_name}}!
+        </mj-text>
+        <mj-text>
+          Your account has been created. Please set your password by following the link below:
+        </mj-text>
+        <mj-button href="{{password_set_url}}" background-color="black" color="white" padding-top="50px" inner-padding="20px" width="70%">
+            Set your password
+        </mj-button>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>`;
+
+const defaultAccountSetStaffPasswordMjmlTemplate = `<mjml>
+  <mj-body>
+    <mj-section>
+      <mj-column>
+        <mj-text font-size="16px">
+          Hi {{user.first_name}}!
+        </mj-text>
+        <mj-text>
+          Your staff account has been created. Please set your password by following the link below:
+        </mj-text>
+        <mj-button href="{{password_set_url}}" background-color="black" color="white" padding-top="50px" inner-padding="20px" width="70%">
+            Set your password
+        </mj-button>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>`;
+
+const defaultAccountStaffResetPasswordMjmlTemplate = `<mjml>
+  <mj-body>
+    <mj-section>
+      <mj-column>
+        <mj-text font-size="16px">
+          Hi {{user.first_name}}!
+        </mj-text>
+        <mj-text>
+          A password reset has been requested for your staff account. Please follow the link to proceed:
+        </mj-text>
+        <mj-button href="{{reset_url}}" background-color="black" color="white" padding-top="50px" inner-padding="20px" width="70%">
+            Reset the password
+        </mj-button>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>`;
+
+const defaultCsvExportSuccessMjmlTemplate = `<mjml>
+  <mj-body>
+    <mj-section>
+      <mj-column>
+        <mj-text font-size="16px">
+          Hi!
+        </mj-text>
+        <mj-text>
+          Your CSV export is ready. Click the link below to download it:
+        </mj-text>
+        <mj-button href="{{csv_link}}" background-color="black" color="white" padding-top="50px" inner-padding="20px" width="70%">
+            Download CSV
+        </mj-button>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>`;
+
+const defaultCsvExportFailedMjmlTemplate = `<mjml>
+  <mj-body>
+    <mj-section>
+      <mj-column>
+        <mj-text font-size="16px">
+          Hi!
+        </mj-text>
+        <mj-text>
+          Unfortunately, your CSV export has failed. Please try again or contact support if the issue persists.
+        </mj-text>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>`;
+
+const defaultStaffOrderConfirmationMjmlTemplate = `<mjml>
+  <mj-body>
+    <mj-section>
+      <mj-column>
+        <mj-text font-size="16px">
+          New order received!
+        </mj-text>
+        <mj-text>
+          Order {{ order.number }} has been placed by {{ order.email }}.
+        </mj-text>
+      </mj-column>
+    </mj-section>
+    ${addressSectionForNotify}
+  </mj-body>
+</mjml>`;
+
 export const defaultMjmlTemplates: Record<MessageEventTypes, string> = {
   ACCOUNT_CHANGE_EMAIL_CONFIRM: defaultAccountChangeEmailConfirmationMjmlTemplate,
   ACCOUNT_CHANGE_EMAIL_REQUEST: defaultAccountChangeEmailRequestMjmlTemplate,
   ACCOUNT_CONFIRMATION: defaultAccountConfirmationMjmlTemplate,
   ACCOUNT_DELETE: defaultAccountDeleteMjmlTemplate,
   ACCOUNT_PASSWORD_RESET: defaultAccountPasswordResetMjmlTemplate,
+  ACCOUNT_SET_CUSTOMER_PASSWORD: defaultAccountSetCustomerPasswordMjmlTemplate,
+  ACCOUNT_SET_STAFF_PASSWORD: defaultAccountSetStaffPasswordMjmlTemplate,
+  ACCOUNT_STAFF_RESET_PASSWORD: defaultAccountStaffResetPasswordMjmlTemplate,
+  CSV_EXPORT_SUCCESS: defaultCsvExportSuccessMjmlTemplate,
+  CSV_EXPORT_FAILED: defaultCsvExportFailedMjmlTemplate,
   GIFT_CARD_SENT: defaultGiftCardSentMjmlTemplate,
   INVOICE_SENT: defaultInvoiceSentMjmlTemplate,
   ORDER_CANCELLED: defaultOrderCancelledMjmlTemplate,
@@ -391,6 +499,7 @@ export const defaultMjmlTemplates: Record<MessageEventTypes, string> = {
   ORDER_FULFILLMENT_UPDATE: defaultOrderFulfillmentUpdatedMjmlTemplate,
   ORDER_FULLY_PAID: defaultOrderFullyPaidMjmlTemplate,
   ORDER_REFUNDED: defaultOrderRefundedMjmlTemplate,
+  STAFF_ORDER_CONFIRMATION: defaultStaffOrderConfirmationMjmlTemplate,
 };
 
 export const defaultMjmlSubjectTemplates: Record<MessageEventTypes, string> = {
@@ -399,6 +508,11 @@ export const defaultMjmlSubjectTemplates: Record<MessageEventTypes, string> = {
   ACCOUNT_CONFIRMATION: "Account activation",
   ACCOUNT_DELETE: "Account deletion",
   ACCOUNT_PASSWORD_RESET: "Password reset request",
+  ACCOUNT_SET_CUSTOMER_PASSWORD: "Set your account password",
+  ACCOUNT_SET_STAFF_PASSWORD: "Set your staff account password",
+  ACCOUNT_STAFF_RESET_PASSWORD: "Staff password reset request",
+  CSV_EXPORT_SUCCESS: "Your CSV export is ready",
+  CSV_EXPORT_FAILED: "CSV export failed",
   GIFT_CARD_SENT: "Gift card",
   INVOICE_SENT: "New invoice has been created",
   ORDER_CANCELLED: "Order {{ order.number }} has been cancelled",
@@ -408,4 +522,5 @@ export const defaultMjmlSubjectTemplates: Record<MessageEventTypes, string> = {
   ORDER_FULFILLMENT_UPDATE: "Fulfillment for order {{ order.number }} has been updated",
   ORDER_FULLY_PAID: "Order {{ order.number }} has been fully paid",
   ORDER_REFUNDED: "Order {{ order.number }} has been refunded",
+  STAFF_ORDER_CONFIRMATION: "New order {{ order.number }} received",
 };

@@ -32,7 +32,7 @@ const handler: NextJsWebhookHandler<NotifySubscriptionPayload> = async (req, res
 
   const { payload, authData } = context;
 
-  const { channel_slug: channel, recipient_email: recipientEmail } = payload.payload;
+  const { channel_slug: channel } = payload.payload;
 
   /**
    * Since NOTIFY can be send on events unrelated to this app, lack of mapping means the App does not support it
@@ -42,14 +42,6 @@ const handler: NextJsWebhookHandler<NotifySubscriptionPayload> = async (req, res
 
   loggerContext.set("event", event);
 
-  if (!recipientEmail?.length) {
-    logger.error(`The email recipient has not been specified in the event payload.`);
-
-    return res
-      .status(200)
-      .json({ error: "Email recipient has not been specified in the event payload." });
-  }
-
   if (!event) {
     loggerContext.set("event", payload.notify_event);
 
@@ -58,47 +50,83 @@ const handler: NextJsWebhookHandler<NotifySubscriptionPayload> = async (req, res
     return res.status(200).json({ message: `${payload.notify_event} event is not supported.` });
   }
 
+  // STAFF_ORDER_CONFIRMATION uses recipient_list (array) instead of recipient_email
+  const recipientEmails: string[] = [];
+
+  if (
+    payload.notify_event === "staff_order_confirmation" &&
+    "recipient_list" in payload.payload &&
+    Array.isArray(payload.payload.recipient_list)
+  ) {
+    recipientEmails.push(...payload.payload.recipient_list);
+  }
+
+  if ("recipient_email" in payload.payload && payload.payload.recipient_email) {
+    if (recipientEmails.length === 0) {
+      recipientEmails.push(payload.payload.recipient_email);
+    }
+  }
+
+  if (recipientEmails.length === 0) {
+    logger.error(`The email recipient has not been specified in the event payload.`);
+
+    return res
+      .status(200)
+      .json({ error: "Email recipient has not been specified in the event payload." });
+  }
+
   const useCase = useCaseFactory.createFromAuthData(authData);
 
   try {
-    return useCase
-      .sendEventMessages({
-        channelSlug: channel,
-        event,
-        payload: payload.payload,
-        recipientEmail,
-      })
-      .then((result) =>
-        result.match(
-          (r) => {
-            logger.info("Successfully sent email(s)");
+    // Send to all recipients (usually 1, but STAFF_ORDER_CONFIRMATION can have multiple)
+    const results = await Promise.all(
+      recipientEmails.map((recipientEmail) =>
+        useCase.sendEventMessages({
+          channelSlug: channel,
+          event,
+          payload: payload.payload,
+          recipientEmail,
+        }),
+      ),
+    );
 
-            return res.status(200).json({ message: "The event has been handled" });
-          },
-          (err) => {
-            const errorInstance = err[0];
+    // Check if any result succeeded
+    const hasSuccess = results.some((r) => r.isOk());
+    const firstError = results.find((r) => r.isErr());
 
-            if (errorInstance instanceof SendEventMessagesUseCase.ServerError) {
-              logger.warn("Failed to send email(s) [server error]", { error: err });
+    if (hasSuccess) {
+      logger.info("Successfully sent email(s)", {
+        recipientCount: recipientEmails.length,
+      });
 
-              return res.status(500).json({ message: "Failed to send email" });
-            } else if (errorInstance instanceof SendEventMessagesUseCase.ClientError) {
-              logger.info("Failed to send email(s) [client error]", { error: err });
+      return res.status(200).json({ message: "The event has been handled" });
+    }
 
-              return res.status(400).json({ message: "Failed to send email" });
-            } else if (errorInstance instanceof SendEventMessagesUseCase.NoOpError) {
-              logger.info("Sending emails aborted [no op]", { error: err });
+    if (firstError && firstError.isErr()) {
+      const err = firstError.error;
+      const errorInstance = err[0];
 
-              return res.status(200).json({ message: "The event has been handled [no op]" });
-            }
+      if (errorInstance instanceof SendEventMessagesUseCase.ServerError) {
+        logger.warn("Failed to send email(s) [server error]", { error: err });
 
-            logger.error("Failed to send email(s) [unhandled error]", { error: err });
-            captureException(new Error("Unhandled useCase error", { cause: err }));
+        return res.status(500).json({ message: "Failed to send email" });
+      } else if (errorInstance instanceof SendEventMessagesUseCase.ClientError) {
+        logger.info("Failed to send email(s) [client error]", { error: err });
 
-            return res.status(500).json({ message: "Failed to send email [unhandled]" });
-          },
-        ),
-      );
+        return res.status(400).json({ message: "Failed to send email" });
+      } else if (errorInstance instanceof SendEventMessagesUseCase.NoOpError) {
+        logger.info("Sending emails aborted [no op]", { error: err });
+
+        return res.status(200).json({ message: "The event has been handled [no op]" });
+      }
+
+      logger.error("Failed to send email(s) [unhandled error]", { error: err });
+      captureException(new Error("Unhandled useCase error", { cause: err }));
+
+      return res.status(500).json({ message: "Failed to send email [unhandled]" });
+    }
+
+    return res.status(200).json({ message: "The event has been handled" });
   } catch (e) {
     logger.error("Unhandled error from useCase", {
       error: e,

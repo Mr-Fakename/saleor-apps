@@ -35,6 +35,11 @@ export const eventToWebhookMapping: Record<MessageEventTypes, AppWebhook> = {
   ACCOUNT_CONFIRMATION: "notifyWebhook",
   ACCOUNT_DELETE: "notifyWebhook",
   ACCOUNT_PASSWORD_RESET: "notifyWebhook",
+  ACCOUNT_SET_CUSTOMER_PASSWORD: "notifyWebhook",
+  ACCOUNT_SET_STAFF_PASSWORD: "notifyWebhook",
+  ACCOUNT_STAFF_RESET_PASSWORD: "notifyWebhook",
+  CSV_EXPORT_SUCCESS: "notifyWebhook",
+  CSV_EXPORT_FAILED: "notifyWebhook",
   GIFT_CARD_SENT: "giftCardSentWebhook",
   INVOICE_SENT: "invoiceSentWebhook",
   ORDER_CANCELLED: "orderCancelledWebhook",
@@ -44,6 +49,7 @@ export const eventToWebhookMapping: Record<MessageEventTypes, AppWebhook> = {
   ORDER_FULLY_PAID: "orderFullyPaidWebhook",
   ORDER_REFUNDED: "orderRefundedWebhook",
   ORDER_FULFILLMENT_UPDATE: "notifyWebhook",
+  STAFF_ORDER_CONFIRMATION: "notifyWebhook",
 };
 
 const logger = createLogger("WebhookManagementService");

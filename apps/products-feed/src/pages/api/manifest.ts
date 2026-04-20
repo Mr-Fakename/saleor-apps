@@ -21,19 +21,16 @@ export default wrapWithLoggerContext(
         const manifest: AppManifest = {
           about: "Generate feeds consumed by Merchant Platforms",
           appUrl: iframeBaseUrl,
-          author: "Saleor Commerce",
+          author: "Daybreak Development",
           brand: {
             logo: {
               default: `${apiBaseURL}/logo.png`,
             },
           },
-          dataPrivacyUrl: "https://saleor.io/legal/privacy/",
           extensions: [],
-          homepageUrl: "https://github.com/saleor/apps",
           id: "saleor.app.product-feed",
           name: "Product Feed",
           permissions: ["MANAGE_PRODUCTS"],
-          supportUrl: "https://github.com/saleor/apps/discussions",
           tokenTargetUrl: `${apiBaseURL}/api/register`,
           version: packageJson.version,
           webhooks: [],

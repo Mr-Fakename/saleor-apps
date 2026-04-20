@@ -1,0 +1,66 @@
+fragment Address on Address {
+  id
+  country {
+    country
+    code
+  }
+  companyName
+  cityArea
+  countryArea
+  streetAddress1
+  streetAddress2
+  postalCode
+  phone
+  firstName
+  lastName
+  city
+}
+
+fragment Money on Money {
+  amount
+  currency
+}
+
+fragment TaxedMoney on TaxedMoney {
+  currency
+  gross {
+    ...Money
+  }
+  net {
+    ...Money
+  }
+  tax {
+    ...Money
+  }
+}
+
+fragment OrderPayload on Order {
+  id
+  number
+  created
+  status
+  billingAddress {
+    ...Address
+  }
+  total {
+    ...TaxedMoney
+  }
+  channel {
+    slug
+  }
+  lines {
+    productName
+    variantName
+    quantity
+    totalPrice {
+      ...TaxedMoney
+    }
+  }
+  shippingPrice {
+    ...TaxedMoney
+  }
+  shippingMethodName
+  fulfillments {
+    created
+  }
+}

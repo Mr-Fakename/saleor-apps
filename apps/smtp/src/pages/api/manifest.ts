@@ -12,27 +12,24 @@ export default withSpanAttributes(
 
       const manifest: AppManifest = {
         about:
-          "SMTP App is a Saleor integration that allows you to send emails using your own SMTP server.",
+          "SMTP App that allows you to send transactional emails using your own SMTP server.",
         appUrl: iframeBaseUrl,
-        author: "Saleor Commerce",
+        author: "Daybreak Development",
         brand: {
           logo: {
             default: `${apiBaseURL}/logo.png`,
           },
         },
-        dataPrivacyUrl: "https://saleor.io/legal/privacy/",
         extensions: [
           /**
            * Optionally, extend Dashboard with custom UIs
            * https://docs.saleor.io/developer/extending/apps/extending-dashboard-with-apps
            */
         ],
-        homepageUrl: "https://github.com/saleor/apps",
         id: "saleor.app.smtp",
         name: "SMTP",
-        permissions: ["MANAGE_ORDERS", "MANAGE_USERS", "MANAGE_GIFT_CARD"],
+        permissions: ["MANAGE_ORDERS", "MANAGE_USERS", "MANAGE_GIFT_CARD", "MANAGE_STAFF"],
         requiredSaleorVersion: ">=3.19 <4",
-        supportUrl: "https://github.com/saleor/apps/discussions",
         tokenTargetUrl: `${apiBaseURL}/api/register`,
         version: packageJson.version,
       };

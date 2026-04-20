@@ -39,19 +39,16 @@ const handler = createManifestHandler({
     const manifest: AppManifest = {
       about: "App connects with AvaTax to dynamically calculate taxes",
       appUrl: iframeBaseUrl,
-      author: "Saleor Commerce",
+      author: "Daybreak Development",
       brand: {
         logo: {
           default: `${apiBaseURL}/logo.png`,
         },
       },
-      dataPrivacyUrl: "https://saleor.io/legal/privacy/",
-      homepageUrl: "https://github.com/saleor/apps",
       id: env.MANIFEST_APP_ID,
       name: "AvaTax",
       permissions: ["HANDLE_TAXES", "MANAGE_ORDERS"],
       requiredSaleorVersion: ">=3.19 <4",
-      supportUrl: "https://github.com/saleor/apps/discussions",
       tokenTargetUrl: `${apiBaseURL}/api/register`,
       version: packageJson.version,
       webhooks: appWebhooks.map((w) => w.getWebhookManifest(apiBaseURL)),

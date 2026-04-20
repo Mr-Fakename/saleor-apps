@@ -1,4 +1,3 @@
-import nodemailer from "nodemailer";
 import { err, ok, Result } from "neverthrow";
 
 import { BaseError } from "@/lib/errors";
@@ -32,105 +31,54 @@ export interface SendEmailInput {
 }
 
 export class EmailSender {
-  private transporter: nodemailer.Transporter | null = null;
-  private initialized = false;
-
-  private initializeTransporter() {
-    // Only initialize once
-    if (this.initialized) {
-      return;
-    }
-
-    this.initialized = true;
-
-    try {
-      // Check if email is enabled
-      if (!env.EMAIL_ENABLED) {
-        logger.info("Email sending is disabled via EMAIL_ENABLED=false");
-        return;
-      }
-
-      // Validate required configuration
-      if (!env.EMAIL_FROM) {
-        throw new EmailSenderErrors.ConfigurationError(
-          "EMAIL_FROM is required when EMAIL_ENABLED=true",
-        );
-      }
-
-      // Use SMTP if configured, otherwise use SendGrid
-      if (env.SMTP_HOST) {
-        logger.info("Initializing SMTP email sender", {
-          host: env.SMTP_HOST,
-          port: env.SMTP_PORT,
-          from: env.EMAIL_FROM,
-        });
-
-        this.transporter = nodemailer.createTransport({
-          host: env.SMTP_HOST,
-          port: env.SMTP_PORT,
-          secure: env.SMTP_PORT === 465, // true for 465, false for other ports
-          auth: env.SMTP_USER
-            ? {
-                user: env.SMTP_USER,
-                pass: env.SMTP_PASSWORD,
-              }
-            : undefined,
-        });
-      } else if (env.SENDGRID_API_KEY) {
-        logger.info("Initializing SendGrid email sender", {
-          from: env.EMAIL_FROM,
-        });
-
-        // SendGrid SMTP configuration
-        this.transporter = nodemailer.createTransport({
-          host: "smtp.sendgrid.net",
-          port: 587,
-          secure: false,
-          auth: {
-            user: "apikey",
-            pass: env.SENDGRID_API_KEY,
-          },
-        });
-      } else {
-        logger.warn("No email provider configured (neither SMTP nor SendGrid)");
-      }
-    } catch (error) {
-      logger.error("Failed to initialize email transporter", { error });
-      throw error;
-    }
-  }
-
   async sendEmail(input: SendEmailInput): Promise<Result<void, EmailSenderError>> {
     try {
-      // Lazy initialization - only initialize when actually sending an email
-      this.initializeTransporter();
+      if (!env.EMAIL_ENABLED) {
+        logger.debug("Email sending is disabled via EMAIL_ENABLED=false");
 
-      if (!this.transporter) {
-        logger.debug(
-          "Email sending skipped - transporter not initialized (disabled or not configured)",
-        );
         return ok(undefined);
       }
 
-      const { to, subject, html, text } = input;
+      const smtpAppUrl = env.SMTP_APP_URL;
+      const smtpAppApiKey = env.SMTP_APP_API_KEY;
 
-      logger.info("Sending email", {
+      if (!smtpAppUrl || !smtpAppApiKey) {
+        logger.debug(
+          "Email sending skipped - SMTP App not configured (SMTP_APP_URL or SMTP_APP_API_KEY missing)",
+        );
+
+        return ok(undefined);
+      }
+
+      const { to, subject, html } = input;
+
+      logger.info("Sending email via SMTP App", {
         to,
         subject,
-        from: env.EMAIL_FROM,
+        smtpAppUrl,
       });
 
-      await this.transporter.sendMail({
-        from: env.EMAIL_FROM,
-        to,
-        subject,
-        html,
-        text: text || this.stripHtml(html),
+      const response = await fetch(`${smtpAppUrl}/api/send`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": smtpAppApiKey,
+        },
+        body: JSON.stringify({ to, subject, html }),
       });
 
-      logger.info("Email sent successfully", {
+      if (!response.ok) {
+        const body = await response.text();
+
+        throw new Error(`SMTP App responded with ${response.status}: ${body}`);
+      }
+
+      const result = await response.json();
+
+      logger.info("Email sent successfully via SMTP App", {
         to,
         subject,
+        messageId: result.messageId,
       });
 
       return ok(undefined);
@@ -147,16 +95,6 @@ export class EmailSender {
         }),
       );
     }
-  }
-
-  private stripHtml(html: string): string {
-    // Simple HTML stripping for text version
-    return html
-      .replace(/<style[^>]*>.*?<\/style>/gi, "")
-      .replace(/<script[^>]*>.*?<\/script>/gi, "")
-      .replace(/<[^>]+>/g, "")
-      .replace(/\s+/g, " ")
-      .trim();
   }
 }
 

@@ -5,7 +5,7 @@ import { StripeClient } from "@/modules/stripe/stripe-client";
 
 import { StripePaymentIntentId } from "./stripe-payment-intent-id";
 import { StripeRestrictedKey } from "./stripe-restricted-key";
-import { CreatePaymentIntentArgs, IStripePaymentIntentsApi } from "./types";
+import { CreatePaymentIntentArgs, IStripePaymentIntentsApi, UpdatePaymentIntentArgs } from "./types";
 
 export class StripePaymentIntentsApi implements IStripePaymentIntentsApi {
   private stripeApiWrapper: Pick<Stripe, "paymentIntents">;
@@ -48,6 +48,28 @@ export class StripePaymentIntentsApi implements IStripePaymentIntentsApi {
   }): Promise<Result<Stripe.PaymentIntent, unknown>> {
     return ResultAsync.fromPromise(
       this.stripeApiWrapper.paymentIntents.retrieve(args.id),
+      (error) => error,
+    );
+  }
+
+  /**
+   * Update an existing PaymentIntent's amount and/or metadata.
+   * The clientSecret remains valid after the update, so the storefront
+   * can continue using the same Stripe Elements without remounting.
+   */
+  async updatePaymentIntent(
+    args: UpdatePaymentIntentArgs,
+  ): Promise<Result<Stripe.PaymentIntent, unknown>> {
+    return ResultAsync.fromPromise(
+      this.stripeApiWrapper.paymentIntents.update(
+        args.id,
+        {
+          amount: args.stripeMoney.amount,
+          currency: args.stripeMoney.currency,
+          ...(args.metadata && { metadata: args.metadata }),
+        },
+        args.idempotencyKey ? { idempotencyKey: args.idempotencyKey } : undefined,
+      ),
       (error) => error,
     );
   }

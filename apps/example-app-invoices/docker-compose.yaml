@@ -1,0 +1,13 @@
+services:
+  invoices:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "4010:3000"
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+      - .pnpm-store:/app/.pnpm-store
+      - /app/node_modules

@@ -1,0 +1,50 @@
+query GetProductsByIds($ids: [ID!]!, $channel: String!) {
+  products(first: 100, filter: { ids: $ids }, channel: $channel) {
+    edges {
+      node {
+        id
+        slug
+        name
+        thumbnail {
+          url
+          alt
+        }
+        pricing {
+          priceRange {
+            start {
+              gross {
+                amount
+                currency
+              }
+            }
+            stop {
+              gross {
+                amount
+                currency
+              }
+            }
+          }
+        }
+        isAvailable
+        channelListings {
+          channel {
+            slug
+          }
+          availableForPurchaseAt
+        }
+        variants {
+          id
+          name
+          pricing {
+            price {
+              gross {
+                amount
+                currency
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

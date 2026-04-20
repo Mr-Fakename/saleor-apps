@@ -1,0 +1,27 @@
+query GetUserOrders($userId: ID!, $first: Int!) {
+  user(id: $userId) {
+    id
+    email
+    orders(first: $first) {
+      edges {
+        node {
+          id
+          number
+          created
+          status
+          lines {
+            id
+            productName
+            variantName
+            variant {
+              id
+              product {
+                id
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

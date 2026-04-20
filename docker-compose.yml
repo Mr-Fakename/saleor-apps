@@ -145,6 +145,30 @@ services:
       start_period: 40s
     restart: unless-stopped
 
+  # B2B Tax Manager App
+  b2b-tax-manager:
+    build:
+      context: .
+      dockerfile: apps/b2b-tax-manager/Dockerfile
+    image: saleor-app-b2b-tax-manager:latest
+    container_name: saleor-app-b2b-tax-manager
+    ports:
+      - "3007:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - APL=file
+      - B2B_TAX_MANAGER_API_KEY=${B2B_TAX_MANAGER_API_KEY:-change-me}
+      - SELLER_VAT_NUMBER=${SELLER_VAT_NUMBER:-FR00000000000}
+      - ALLOWED_DOMAIN_PATTERN=/.*/
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/api/manifest', (r) => { process.exit(r.statusCode === 200 ? 0 : 1); })"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
   # Generic app service - can run any app by setting APP_NAME environment variable
   any-app:
     build:

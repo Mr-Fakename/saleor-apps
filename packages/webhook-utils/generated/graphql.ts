@@ -32093,7 +32093,7 @@ export const UntypedCreateAppWebhookDocument = gql`
 
 export function useCreateAppWebhookMutation() {
   return Urql.useMutation<CreateAppWebhookMutation, CreateAppWebhookMutationVariables>(UntypedCreateAppWebhookDocument);
-};
+}
 export const UntypedModifyAppWebhookDocument = gql`
     mutation ModifyAppWebhook($id: ID!, $input: WebhookUpdateInput!) {
   webhookUpdate(id: $id, input: $input) {
@@ -32109,7 +32109,7 @@ export const UntypedModifyAppWebhookDocument = gql`
 
 export function useModifyAppWebhookMutation() {
   return Urql.useMutation<ModifyAppWebhookMutation, ModifyAppWebhookMutationVariables>(UntypedModifyAppWebhookDocument);
-};
+}
 export const UntypedRemoveAppWebhookDocument = gql`
     mutation RemoveAppWebhook($id: ID!) {
   webhookDelete(id: $id) {
@@ -32126,7 +32126,7 @@ export const UntypedRemoveAppWebhookDocument = gql`
 
 export function useRemoveAppWebhookMutation() {
   return Urql.useMutation<RemoveAppWebhookMutation, RemoveAppWebhookMutationVariables>(UntypedRemoveAppWebhookDocument);
-};
+}
 export const UntypedGetAppDetailsAndWebhooksDataDocument = gql`
     query GetAppDetailsAndWebhooksData {
   app {
@@ -32142,7 +32142,7 @@ export const UntypedGetAppDetailsAndWebhooksDataDocument = gql`
 
 export function useGetAppDetailsAndWebhooksDataQuery(options?: Omit<Urql.UseQueryArgs<GetAppDetailsAndWebhooksDataQueryVariables>, 'query'>) {
   return Urql.useQuery<GetAppDetailsAndWebhooksDataQuery, GetAppDetailsAndWebhooksDataQueryVariables>({ query: UntypedGetAppDetailsAndWebhooksDataDocument, ...options });
-};
+}
 export const UntypedGetSaleorInstanceDataDocument = gql`
     query GetSaleorInstanceData {
   shop {
@@ -32153,7 +32153,7 @@ export const UntypedGetSaleorInstanceDataDocument = gql`
 
 export function useGetSaleorInstanceDataQuery(options?: Omit<Urql.UseQueryArgs<GetSaleorInstanceDataQueryVariables>, 'query'>) {
   return Urql.useQuery<GetSaleorInstanceDataQuery, GetSaleorInstanceDataQueryVariables>({ query: UntypedGetSaleorInstanceDataDocument, ...options });
-};
+}
 export const WebhookDetailsFragmentFragmentDoc = {"kind":"Document","definitions":[{"kind":"FragmentDefinition","name":{"kind":"Name","value":"WebhookDetailsFragment"},"typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"Webhook"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"isActive"}},{"kind":"Field","name":{"kind":"Name","value":"name"}},{"kind":"Field","name":{"kind":"Name","value":"targetUrl"}},{"kind":"Field","name":{"kind":"Name","value":"subscriptionQuery"}},{"kind":"Field","name":{"kind":"Name","value":"syncEvents"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"name"}},{"kind":"Field","name":{"kind":"Name","value":"eventType"}}]}},{"kind":"Field","name":{"kind":"Name","value":"asyncEvents"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"name"}},{"kind":"Field","name":{"kind":"Name","value":"eventType"}}]}}]}}]} as unknown as DocumentNode<WebhookDetailsFragmentFragment, unknown>;
 export const CreateAppWebhookDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"CreateAppWebhook"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"input"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"WebhookCreateInput"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"webhookCreate"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"input"},"value":{"kind":"Variable","name":{"kind":"Name","value":"input"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"webhook"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"FragmentSpread","name":{"kind":"Name","value":"WebhookDetailsFragment"}}]}},{"kind":"Field","name":{"kind":"Name","value":"errors"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"code"}},{"kind":"Field","name":{"kind":"Name","value":"field"}},{"kind":"Field","name":{"kind":"Name","value":"message"}}]}}]}}]}},{"kind":"FragmentDefinition","name":{"kind":"Name","value":"WebhookDetailsFragment"},"typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"Webhook"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"isActive"}},{"kind":"Field","name":{"kind":"Name","value":"name"}},{"kind":"Field","name":{"kind":"Name","value":"targetUrl"}},{"kind":"Field","name":{"kind":"Name","value":"subscriptionQuery"}},{"kind":"Field","name":{"kind":"Name","value":"syncEvents"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"name"}},{"kind":"Field","name":{"kind":"Name","value":"eventType"}}]}},{"kind":"Field","name":{"kind":"Name","value":"asyncEvents"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"name"}},{"kind":"Field","name":{"kind":"Name","value":"eventType"}}]}}]}}]} as unknown as DocumentNode<CreateAppWebhookMutation, CreateAppWebhookMutationVariables>;
 export const ModifyAppWebhookDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"ModifyAppWebhook"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"id"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"input"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"WebhookUpdateInput"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"webhookUpdate"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"id"},"value":{"kind":"Variable","name":{"kind":"Name","value":"id"}}},{"kind":"Argument","name":{"kind":"Name","value":"input"},"value":{"kind":"Variable","name":{"kind":"Name","value":"input"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"errors"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"message"}}]}},{"kind":"Field","name":{"kind":"Name","value":"webhook"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"FragmentSpread","name":{"kind":"Name","value":"WebhookDetailsFragment"}}]}}]}}]}},{"kind":"FragmentDefinition","name":{"kind":"Name","value":"WebhookDetailsFragment"},"typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"Webhook"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"isActive"}},{"kind":"Field","name":{"kind":"Name","value":"name"}},{"kind":"Field","name":{"kind":"Name","value":"targetUrl"}},{"kind":"Field","name":{"kind":"Name","value":"subscriptionQuery"}},{"kind":"Field","name":{"kind":"Name","value":"syncEvents"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"name"}},{"kind":"Field","name":{"kind":"Name","value":"eventType"}}]}},{"kind":"Field","name":{"kind":"Name","value":"asyncEvents"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"name"}},{"kind":"Field","name":{"kind":"Name","value":"eventType"}}]}}]}}]} as unknown as DocumentNode<ModifyAppWebhookMutation, ModifyAppWebhookMutationVariables>;

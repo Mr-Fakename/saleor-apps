@@ -1,0 +1,64 @@
+services:
+  checkout-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: saleor-checkout-app
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      # Saleor API URL - Update to match your Saleor instance
+      # For docker-compose network: http://api:8000/graphql/
+      # For external access: Use your actual Saleor URL
+      NEXT_PUBLIC_SALEOR_API_URL: ${SALEOR_API_URL:-http://api:8000/graphql/}
+
+      # Default channel slug
+      NEXT_PUBLIC_DEFAULT_CHANNEL: ${DEFAULT_CHANNEL:-default-channel}
+
+      # App URLs for Saleor to reach the app
+      # For Docker network access (Saleor in same compose network)
+      APP_API_BASE_URL: ${APP_API_BASE_URL:-http://checkout-app:3001}
+
+      # For browser/dashboard access (use your domain)
+      APP_IFRAME_BASE_URL: ${APP_IFRAME_BASE_URL:-http://localhost:3001}
+
+      # APL storage (use 'file' for development, 'upstash' for production)
+      APL: ${APL:-file}
+
+      # Upstash configuration (optional, for production)
+      # UPSTASH_URL: ${UPSTASH_URL}
+      # UPSTASH_TOKEN: ${UPSTASH_TOKEN}
+
+      # Node environment
+      NODE_ENV: production
+
+      # Port configuration
+      PORT: 3001
+      HOSTNAME: "0.0.0.0"
+
+    volumes:
+      # Persist auth data (FileAPL)
+      - checkout-app-data:/app/data
+      # Bind mount auth file for easier development access
+      - ./.auth-data.json:/app/.auth-data.json
+
+    networks:
+      - saleor
+
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/api/manifest', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  checkout-app-data:
+    driver: local
+
+networks:
+  saleor:
+    external: true
+    # If your Saleor platform uses a different network name, update here
+    # or create the network manually: docker network create saleor

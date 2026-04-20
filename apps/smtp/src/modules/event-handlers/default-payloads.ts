@@ -15,7 +15,10 @@ import {
   NotifyPayloadAccountConfirmation,
   NotifyPayloadAccountDelete,
   NotifyPayloadAccountPasswordReset,
+  NotifyPayloadAccountSetPassword,
+  NotifyPayloadCsvExport,
   NotifyPayloadFulfillmentUpdate,
+  NotifyPayloadStaffOrderConfirmation,
 } from "../../lib/notify-event-types";
 import { MessageEventTypes } from "./message-event-types";
 
@@ -578,12 +581,111 @@ const giftCardSentPayload: GiftCardSentWebhookPayloadFragment = {
   },
 };
 
+const accountSetCustomerPasswordPayload: NotifyPayloadAccountSetPassword = {
+  user: {
+    id: "VXNlcjoxOTY=",
+    email: "user@example.com",
+    first_name: "John",
+    last_name: "Doe",
+    is_staff: false,
+    is_active: false,
+    private_metadata: {},
+    metadata: {},
+    language_code: "en",
+  },
+  recipient_email: "user@example.com",
+  token: "bmt4kc-d6e379b762697f6aa357527af36bb9f6",
+  password_set_url:
+    "http://example.com/set-password?email=user%40example.com&token=bmt4kc-d6e379b762697f6aa357527af36bb9f6",
+  channel_slug: "default-channel",
+  domain: "demo.saleor.cloud",
+  site_name: "Saleor e-commerce",
+  logo_url: "",
+};
+
+const accountSetStaffPasswordPayload: NotifyPayloadAccountSetPassword = {
+  user: {
+    id: "VXNlcjoxOTc=",
+    email: "staff@example.com",
+    first_name: "Jane",
+    last_name: "Admin",
+    is_staff: true,
+    is_active: false,
+    private_metadata: {},
+    metadata: {},
+    language_code: "en",
+  },
+  recipient_email: "staff@example.com",
+  token: "abc123-d6e379b762697f6aa357527af36bb9f6",
+  password_set_url:
+    "http://example.com/set-password?email=staff%40example.com&token=abc123-d6e379b762697f6aa357527af36bb9f6",
+  channel_slug: "default-channel",
+  domain: "demo.saleor.cloud",
+  site_name: "Saleor e-commerce",
+  logo_url: "",
+};
+
+const accountStaffResetPasswordPayload: NotifyPayloadAccountPasswordReset = {
+  user: {
+    id: "VXNlcjoxOTc=",
+    email: "staff@example.com",
+    first_name: "Jane",
+    last_name: "Admin",
+    is_staff: true,
+    is_active: true,
+    private_metadata: {},
+    metadata: {},
+    language_code: "en",
+  },
+  recipient_email: "staff@example.com",
+  token: "abc123-d6e379b762697f6aa357527af36bb9f6",
+  reset_url:
+    "http://example.com?email=staff%40example.com&token=abc123-d6e379b762697f6aa357527af36bb9f6",
+  channel_slug: "default-channel",
+  domain: "demo.saleor.cloud",
+  site_name: "Saleor e-commerce",
+  logo_url: "",
+};
+
+const csvExportSuccessPayload: NotifyPayloadCsvExport = {
+  csv_link: "http://example.com/media/export/products-2024-01-15.csv",
+  recipient_email: "staff@example.com",
+  channel_slug: "default-channel",
+  domain: "demo.saleor.cloud",
+  site_name: "Saleor e-commerce",
+  logo_url: "",
+};
+
+const csvExportFailedPayload: NotifyPayloadCsvExport = {
+  csv_link: "",
+  recipient_email: "staff@example.com",
+  channel_slug: "default-channel",
+  domain: "demo.saleor.cloud",
+  site_name: "Saleor e-commerce",
+  logo_url: "",
+};
+
+const staffOrderConfirmationPayload: NotifyPayloadStaffOrderConfirmation = {
+  order: orderPayloadFragment,
+  recipient_email: "staff@example.com",
+  recipient_list: ["staff@example.com", "admin@example.com"],
+  channel_slug: "default-channel",
+  domain: "demo.saleor.cloud",
+  site_name: "Saleor e-commerce",
+  logo_url: "",
+};
+
 export const examplePayloads: Record<MessageEventTypes, any> = {
   ACCOUNT_CHANGE_EMAIL_CONFIRM: accountChangeEmailConfirmPayload,
   ACCOUNT_CHANGE_EMAIL_REQUEST: accountChangeEmailRequestPayload,
   ACCOUNT_CONFIRMATION: accountConfirmationPayload,
   ACCOUNT_DELETE: accountDeletePayload,
   ACCOUNT_PASSWORD_RESET: accountPasswordResetPayload,
+  ACCOUNT_SET_CUSTOMER_PASSWORD: accountSetCustomerPasswordPayload,
+  ACCOUNT_SET_STAFF_PASSWORD: accountSetStaffPasswordPayload,
+  ACCOUNT_STAFF_RESET_PASSWORD: accountStaffResetPasswordPayload,
+  CSV_EXPORT_SUCCESS: csvExportSuccessPayload,
+  CSV_EXPORT_FAILED: csvExportFailedPayload,
   GIFT_CARD_SENT: giftCardSentPayload,
   INVOICE_SENT: invoiceSentPayload,
   ORDER_CANCELLED: orderCancelledPayload,
@@ -593,4 +695,5 @@ export const examplePayloads: Record<MessageEventTypes, any> = {
   ORDER_FULLY_PAID: orderFullyPaidPayload,
   ORDER_FULFILLMENT_UPDATE: fulfillmentUpdatePayload,
   ORDER_REFUNDED: orderRefundedPayload,
+  STAFF_ORDER_CONFIRMATION: staffOrderConfirmationPayload,
 };

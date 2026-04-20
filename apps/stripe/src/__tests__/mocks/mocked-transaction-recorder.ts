@@ -20,6 +20,16 @@ export class MockedTransactionRecorder implements TransactionRecorderRepo {
     return ok(null);
   }
 
+  async upsertTransaction(
+    _accessPattern: TransactionRecorderRepoAccess,
+    transaction: RecordedTransaction,
+  ): Promise<Result<null, TransactionRecorderError>> {
+    // Upsert just overwrites regardless of whether it exists
+    this.transactions[transaction.stripePaymentIntentId] = transaction;
+
+    return ok(null);
+  }
+
   async getTransactionByStripePaymentIntentId(
     _accessPattern: TransactionRecorderRepoAccess,
     id: StripePaymentIntentId,

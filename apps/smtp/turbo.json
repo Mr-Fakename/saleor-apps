@@ -2,6 +2,18 @@
   "$schema": "https://turbo.build/schema.v2.json",
   "extends": ["//"],
   "tasks": {
+    "build": {
+      "env": [
+        "EMAIL_BRIDGE_API_SECRET",
+        "EMAIL_BRIDGE_SMTP_HOST",
+        "EMAIL_BRIDGE_SMTP_PORT",
+        "EMAIL_BRIDGE_SMTP_SECURE",
+        "EMAIL_BRIDGE_SMTP_USER",
+        "EMAIL_BRIDGE_SMTP_PASS",
+        "EMAIL_BRIDGE_SMTP_FROM",
+        "INIT_DYNAMODB_ON_STARTUP"
+      ]
+    },
     "deploy": {
       "env": [
         "ALLOWED_DOMAIN_PATTERN",

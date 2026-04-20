@@ -1,4 +1,5 @@
-# docker build -f apps/stripe/Dockerfile -t  mrfakename/stripe-app:latest .
+# docker build -f apps/stripe/Dockerfile -t mrfakename/stripe-app:latest .
+# docker push mrfakename/stripe-app:latest
 
 FROM node:22-alpine AS base
 RUN apk add --no-cache libc6-compat

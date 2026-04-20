@@ -22,15 +22,13 @@ const handler = createManifestHandler({
       about:
         "App that allows merchants using the Saleor e-commerce platform to accept online payments from customers using NP Atobarai as their payment processor.",
       appUrl: iframeBaseUrl,
-      author: "Saleor Commerce",
+      author: "Daybreak Development",
       brand: {
         logo: {
           default: `${apiBaseUrl}/logo.png`,
         },
       },
-      dataPrivacyUrl: "https://saleor.io/legal/privacy/",
       extensions: [],
-      homepageUrl: "https://github.com/saleor/apps",
       id: env.MANIFEST_APP_ID,
       /**
        * Can set custom name, e.g. in Development to recognize the app
@@ -38,7 +36,6 @@ const handler = createManifestHandler({
       name: env.APP_NAME,
       permissions: ["HANDLE_PAYMENTS", "MANAGE_ORDERS"],
       requiredSaleorVersion: ">=3.20 <4",
-      supportUrl: "https://saleor.io/discord",
       tokenTargetUrl: `${apiBaseUrl}/api/register`,
       version: packageJson.version,
       webhooks: [

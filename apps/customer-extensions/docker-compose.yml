@@ -1,0 +1,79 @@
+version: '3.8'
+
+x-traefik-base-labels: &traefik-base-labels
+  traefik.enable: "true"
+
+services:
+  customer-extensions:
+    build:
+      context: ../..
+      dockerfile: apps/customer-extensions/Dockerfile
+      args:
+        # Build-time arguments for Next.js public env vars
+        NEXT_PUBLIC_SALEOR_API_URL: ${CUSTOMER_EXTENSIONS_NEXT_PUBLIC_SALEOR_API_URL}
+        NEXT_PUBLIC_CUSTOMER_EXTENSIONS_APP_URL: ${CUSTOMER_EXTENSIONS_PUBLIC_URL}
+    image: ${CUSTOMER_EXTENSIONS_IMAGE:-mrfakename/customer-extensions-app:latest}
+    container_name: saleor-customer-extensions
+    environment:
+      # Core
+      - SECRET_KEY=${CUSTOMER_EXTENSIONS_SECRET_KEY}
+      - ALLOWED_DOMAIN_PATTERN=${CUSTOMER_EXTENSIONS_ALLOWED_DOMAIN_PATTERN}
+
+      # APL
+      - APL=${CUSTOMER_EXTENSIONS_APL}
+
+      # DynamoDB
+      - DYNAMODB_MAIN_TABLE_NAME=${CUSTOMER_EXTENSIONS_DYNAMODB_TABLE}
+      - AWS_REGION=${AWS_REGION}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - INIT_DYNAMODB_ON_STARTUP=${CUSTOMER_EXTENSIONS_INIT_DYNAMODB:-false}
+
+      # Saleor API
+      - SALEOR_API_URL=${SALEOR_API_URL}
+
+      # Optional: Sentry
+      - SENTRY_ORG=${SENTRY_ORG:-}
+      - SENTRY_PROJECT=${SENTRY_PROJECT:-}
+      - SENTRY_AUTH_TOKEN=${SENTRY_AUTH_TOKEN:-}
+      - NEXT_PUBLIC_SENTRY_DSN=${NEXT_PUBLIC_SENTRY_DSN:-}
+
+      # Optional: OpenTelemetry
+      - OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-customer-extensions}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3010/api/manifest', (r) => { process.exit(r.statusCode === 200 ? 0 : 1); })"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - traefik-public
+    labels:
+      <<: *traefik-base-labels
+      traefik.http.routers.saleor-customer-extensions.rule: "Host(`${CUSTOMER_EXTENSIONS_DOMAIN}`)"
+      traefik.http.routers.saleor-customer-extensions.entrypoints: "web,websecure"
+      traefik.http.routers.saleor-customer-extensions.tls.certResolver: "letsencrypt"
+      traefik.http.routers.saleor-customer-extensions.priority: "${CUSTOMER_EXTENSIONS_PRIORITY}"
+      traefik.http.services.saleor-customer-extensions.loadbalancer.server.port: "3010"
+      traefik.http.services.saleor-customer-extensions.loadbalancer.passhostheader: "true"
+
+      # Isolated Customer Extensions Middlewares
+      traefik.http.middlewares.saleor-customer-extensions-buffering.buffering.maxRequestBodyBytes: "${CUSTOMER_EXTENSIONS_MAX_REQUEST_BODY_BYTES}"
+      traefik.http.middlewares.saleor-customer-extensions-buffering.buffering.retryExpression: "${CUSTOMER_EXTENSIONS_RETRY_EXPRESSION}"
+      traefik.http.middlewares.saleor-customer-extensions-cors.headers.accessControlAllowMethods: "${CORS_ALLOW_METHODS}"
+      traefik.http.middlewares.saleor-customer-extensions-cors.headers.accessControlAllowOriginListRegex: "${CUSTOMER_EXTENSIONS_CORS_ALLOW_ORIGIN_REGEX}"
+      traefik.http.middlewares.saleor-customer-extensions-cors.headers.accessControlAllowHeaders: "${CORS_ALLOW_HEADERS}"
+      traefik.http.middlewares.saleor-customer-extensions-cors.headers.accessControlAllowCredentials: "${CORS_ALLOW_CREDENTIALS}"
+      traefik.http.middlewares.saleor-customer-extensions-cors.headers.accessControlMaxAge: "${CORS_MAX_AGE}"
+      traefik.http.middlewares.saleor-customer-extensions-cors.headers.addVaryHeader: "${CORS_ADD_VARY_HEADER}"
+      traefik.http.middlewares.saleor-customer-extensions-headers.headers.customrequestheaders.X-Forwarded-Proto: "${FORWARDED_PROTO}"
+      traefik.http.middlewares.saleor-customer-extensions-headers.headers.customrequestheaders.X-Forwarded-Port: "${FORWARDED_PORT}"
+
+      # Apply to Customer Extensions Router
+      traefik.http.routers.saleor-customer-extensions.middlewares: "saleor-customer-extensions-cors,saleor-customer-extensions-headers,saleor-customer-extensions-buffering"
+
+networks:
+  traefik-public:
+    external: true

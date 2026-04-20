@@ -1,0 +1,18 @@
+query GetRecentOrders($first: Int!, $channel: String) {
+  orders(first: $first, channel: $channel, sortBy: { field: CREATED_AT, direction: DESC }) {
+    edges {
+      node {
+        id
+        number
+        created
+        status
+        user {
+          id
+          email
+          firstName
+          lastName
+        }
+      }
+    }
+  }
+}

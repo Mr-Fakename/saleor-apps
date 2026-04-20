@@ -16,17 +16,15 @@ const handler = createManifestHandler({
 
     const manifest: AppManifest = {
       about:
-        "App that provides secure digital downloads for products in your Saleor store. Automatically generates time-limited download links when orders are fully paid.",
+        "App that provides secure digital downloads for products. Automatically generates time-limited download links when orders are fully paid.",
       appUrl: iframeBaseUrl,
-      author: "Saleor Commerce",
+      author: "Daybreak Development",
       brand: {
         logo: {
           default: `${apiBaseUrl}/logo.png`,
         },
       },
-      dataPrivacyUrl: "https://saleor.io/legal/privacy/",
       extensions: [],
-      homepageUrl: "https://github.com/saleor/apps",
       id: env.MANIFEST_APP_ID,
       /**
        * Can set custom name, e.g. in Development to recognize the app
@@ -34,7 +32,6 @@ const handler = createManifestHandler({
       name: env.APP_NAME,
       permissions: ["MANAGE_ORDERS", "MANAGE_PRODUCTS"],
       requiredSaleorVersion: ">=3.21 <4",
-      supportUrl: "https://saleor.io/discord",
       tokenTargetUrl: `${apiBaseUrl}/api/register`,
       version: packageJson.version,
       webhooks: [orderFullyPaidWebhookDefinition.getWebhookManifest(apiBaseUrl)],
