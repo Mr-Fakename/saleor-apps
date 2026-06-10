@@ -25,14 +25,19 @@ COPY apps/checkout-prices ./apps/checkout-prices
 WORKDIR /app/apps/checkout-prices
 
 # ==============================================================================
-# CRITICAL FIX: Bake the PUBLIC, Traefik-secured API URL into the Next.js build.
-# This ensures the SSR server routes out to Traefik and back in, maintaining SSL.
+# NEXT_PUBLIC_* values are inlined into the bundle at build time and only the
+# browser-side dashboard page depends on them. Server-side code reads the
+# RUNTIME env (SALEOR_API_URL / DEFAULT_CHANNEL — see src/const.ts), so the
+# image works against any Saleor instance without a rebuild. The ARG default
+# points at the current staging API; override at build for other deployments.
 # ==============================================================================
-RUN echo "NEXT_PUBLIC_SALEOR_API_URL=https://saleor-api.vps.daybreakdevelopment.eu/graphql/" > .env && \
-    echo "NEXT_PUBLIC_DEFAULT_CHANNEL=default-channel" >> .env
+ARG NEXT_PUBLIC_SALEOR_API_URL=https://dess-api.daybreakdevelopment.eu/graphql/
+ARG NEXT_PUBLIC_DEFAULT_CHANNEL=default-channel
+RUN echo "NEXT_PUBLIC_SALEOR_API_URL=${NEXT_PUBLIC_SALEOR_API_URL}" > .env && \
+    echo "NEXT_PUBLIC_DEFAULT_CHANNEL=${NEXT_PUBLIC_DEFAULT_CHANNEL}" >> .env
 
-ENV NEXT_PUBLIC_SALEOR_API_URL=https://saleor-api.vps.daybreakdevelopment.eu/graphql/
-ENV NEXT_PUBLIC_DEFAULT_CHANNEL=default-channel
+ENV NEXT_PUBLIC_SALEOR_API_URL=${NEXT_PUBLIC_SALEOR_API_URL}
+ENV NEXT_PUBLIC_DEFAULT_CHANNEL=${NEXT_PUBLIC_DEFAULT_CHANNEL}
 ENV NODE_ENV=production
 # Hoisted deps put binaries at the workspace root
 ENV PATH="/app/node_modules/.bin:$PATH"
