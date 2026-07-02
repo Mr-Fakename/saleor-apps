@@ -2,11 +2,15 @@ import { afterEach, beforeEach, describe, it, expect } from "vitest";
 import { MicroinvoiceInvoiceGenerator } from "./microinvoice-invoice-generator";
 import { readFile } from "fs/promises";
 import { join } from "path";
+import { tmpdir } from "os";
 import rimraf from "rimraf";
 import { mockOrder } from "../../../../fixtures/mock-order";
 import { getMockAddress } from "../../../../fixtures/mock-address";
 
-const dirToSet = process.env.TEMP_PDF_STORAGE_DIR as string;
+// Default so the module still LOADS in CI: the it.runIf below skips the test
+// there, but a bare join(undefined, ...) at module level crashed collection
+// before the skip could apply.
+const dirToSet = process.env.TEMP_PDF_STORAGE_DIR ?? join(tmpdir(), "invoices-microinvoice-test");
 const filePath = join(dirToSet, "test-invoice.pdf");
 
 const cleanup = () => rimraf.sync(filePath);
