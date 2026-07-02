@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import handler from "./send";
+import handler from "../../pages/api/send";
 
 // Mock nodemailer
 const mockSendMail = vi.fn();

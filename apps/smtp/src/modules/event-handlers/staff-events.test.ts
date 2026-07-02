@@ -67,7 +67,7 @@ class MockConfigService implements IGetSmtpConfiguration {
 
 describe("Staff Events", () => {
   /*
-   * 1. All 20 event types have required resources
+   * 1. All 22 event types have required resources
    */
   describe("Event type completeness", () => {
     it("all messageEventTypes have a default MJML template", () => {
@@ -90,8 +90,9 @@ describe("Staff Events", () => {
       }
     });
 
-    it("messageEventTypes array contains exactly 20 event types", () => {
-      expect(messageEventTypes).toHaveLength(20);
+    it("messageEventTypes array contains exactly 22 event types", () => {
+      // 20 original events + WITHDRAWAL_REQUESTED_CUSTOMER / WITHDRAWAL_REQUESTED_STAFF (EU withdrawal flow)
+      expect(messageEventTypes).toHaveLength(22);
     });
 
     it("labels record covers all event types", () => {
@@ -119,6 +120,8 @@ describe("Staff Events", () => {
       csv_export_failed: "CSV_EXPORT_FAILED",
       order_fulfillment_update: "ORDER_FULFILLMENT_UPDATE",
       staff_order_confirmation: "STAFF_ORDER_CONFIRMATION",
+      withdrawal_requested_customer: "WITHDRAWAL_REQUESTED_CUSTOMER",
+      withdrawal_requested_staff: "WITHDRAWAL_REQUESTED_STAFF",
     };
 
     it("maps all expected Saleor notify events", () => {
@@ -127,8 +130,8 @@ describe("Staff Events", () => {
       }
     });
 
-    it("has exactly 12 notify event mappings", () => {
-      expect(Object.keys(notifyEventMapping)).toHaveLength(12);
+    it("has exactly 14 notify event mappings", () => {
+      expect(Object.keys(notifyEventMapping)).toHaveLength(14);
     });
 
     it("all mapped values are valid MessageEventTypes", () => {
@@ -141,7 +144,7 @@ describe("Staff Events", () => {
   /*
    * 3. Template compilation for all event types
    */
-  describe("Template compilation for all 20 event types", () => {
+  describe("Template compilation for all 22 event types", () => {
     const compiler = new EmailCompiler(
       new HandlebarsTemplateCompiler(),
       new HtmlToTextCompiler(),
@@ -197,7 +200,8 @@ describe("Staff Events", () => {
       const email = result._unsafeUnwrap();
 
       expect(email.html).toContain("set-password");
-      expect(email.subject).toContain("password");
+      // Default subjects are now French (Dess design-system templates)
+      expect(email.subject.toLowerCase()).toContain("mot de passe");
     });
 
     it("ACCOUNT_SET_STAFF_PASSWORD template includes staff-specific language", () => {
@@ -213,8 +217,9 @@ describe("Staff Events", () => {
 
       const email = result._unsafeUnwrap();
 
-      expect(email.html).toContain("staff");
-      expect(email.subject.toLowerCase()).toContain("staff");
+      // French templates: staff accounts are referred to as "équipe"
+      expect(email.html).toContain("équipe");
+      expect(email.subject.toLowerCase()).toContain("équipe");
     });
 
     it("CSV_EXPORT_SUCCESS template includes download link", () => {
@@ -391,7 +396,7 @@ describe("Staff Events", () => {
       expect(email.html).toContain("Alice");
       expect(email.html).toContain("store.com/reset?token");
       expect(email.html).toContain("abc123");
-      expect(email.subject.toLowerCase()).toContain("password");
+      expect(email.subject.toLowerCase()).toContain("mot de passe");
     });
 
     it("Scenario: user wants to change email → ACCOUNT_CHANGE_EMAIL_REQUEST", () => {
@@ -451,7 +456,8 @@ describe("Staff Events", () => {
       const email = result._unsafeUnwrap();
 
       expect(email.subject).toContain("198");
-      expect(email.html).toContain("fulfilled");
+      // French template copy: "Votre commande a été expédiée"
+      expect(email.html).toContain("expédiée");
     });
 
     it("Scenario: order fully paid → ORDER_FULLY_PAID", () => {
@@ -468,7 +474,8 @@ describe("Staff Events", () => {
       const email = result._unsafeUnwrap();
 
       expect(email.subject).toContain("198");
-      expect(email.html).toContain("paid");
+      // French template copy: "Paiement confirmé"
+      expect(email.html).toContain("Paiement confirmé");
     });
 
     it("Scenario: order cancelled → ORDER_CANCELLED", () => {
@@ -485,7 +492,8 @@ describe("Staff Events", () => {
       const email = result._unsafeUnwrap();
 
       expect(email.subject).toContain("198");
-      expect(email.html).toContain("cancelled");
+      // French template copy: "Votre commande a été annulée"
+      expect(email.html).toContain("annulée");
     });
 
     it("Scenario: order refunded → ORDER_REFUNDED", () => {
@@ -502,7 +510,8 @@ describe("Staff Events", () => {
       const email = result._unsafeUnwrap();
 
       expect(email.subject).toContain("198");
-      expect(email.html).toContain("refunded");
+      // French template copy: "Votre remboursement a été effectué"
+      expect(email.html).toContain("remboursement");
     });
 
     it("Scenario: fulfillment update with tracking → ORDER_FULFILLMENT_UPDATE", () => {
@@ -535,7 +544,8 @@ describe("Staff Events", () => {
 
       const email = result._unsafeUnwrap();
 
-      expect(email.subject.toLowerCase()).toContain("invoice");
+      // French subject: "Votre facture est disponible"
+      expect(email.subject.toLowerCase()).toContain("facture");
     });
 
     it("Scenario: account confirmation → ACCOUNT_CONFIRMATION", () => {
@@ -575,7 +585,8 @@ describe("Staff Events", () => {
 
       const email = result._unsafeUnwrap();
 
-      expect(email.subject.toLowerCase()).toContain("delet");
+      // French subject: "Confirmez la suppression de votre compte"
+      expect(email.subject.toLowerCase()).toContain("suppression");
     });
 
     it("Scenario: staff password set → ACCOUNT_SET_STAFF_PASSWORD", () => {
@@ -624,7 +635,8 @@ describe("Staff Events", () => {
 
       const email = result._unsafeUnwrap();
 
-      expect(email.subject.toLowerCase()).toContain("failed");
+      // French subject: "Échec de votre export CSV"
+      expect(email.subject.toLowerCase()).toContain("échec");
     });
 
     it("Scenario: new order → staff notification → STAFF_ORDER_CONFIRMATION", () => {

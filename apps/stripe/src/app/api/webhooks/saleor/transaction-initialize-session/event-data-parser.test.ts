@@ -48,7 +48,12 @@ describe("parseTransactionInitializeSessionEventData", () => {
     expect(result._unsafeUnwrapErr()).toBeInstanceOf(ParseError);
   });
 
-  it("should return ParseError is storefront sends additional field we dont support", () => {
+  /*
+   * The top-level schema is no longer strict (it gained the optional
+   * existingPaymentIntentId field for checkout-resume support), so unknown
+   * top-level fields are stripped instead of causing a ParseError.
+   */
+  it("should tolerate (strip) additional top-level field we dont support", () => {
     const storefrontData = {
       paymentIntent: {
         paymentMethod: "card",
@@ -57,7 +62,28 @@ describe("parseTransactionInitializeSessionEventData", () => {
     };
     const result = parseTransactionInitializeSessionEventData(storefrontData);
 
-    expect(result._unsafeUnwrapErr()).toBeInstanceOf(ParseError);
+    expect(result._unsafeUnwrap()).toStrictEqual({
+      paymentIntent: {
+        paymentMethod: "card",
+      },
+    });
+  });
+
+  it("should parse optional existingPaymentIntentId passed by storefront", () => {
+    const storefrontData = {
+      paymentIntent: {
+        paymentMethod: "card",
+      },
+      existingPaymentIntentId: "pi_TEST_TEST_TEST",
+    };
+    const result = parseTransactionInitializeSessionEventData(storefrontData);
+
+    expect(result._unsafeUnwrap()).toStrictEqual({
+      paymentIntent: {
+        paymentMethod: "card",
+      },
+      existingPaymentIntentId: "pi_TEST_TEST_TEST",
+    });
   });
 
   it("shouldn't be assignable without createFromTransactionInitalizeSessionData", () => {

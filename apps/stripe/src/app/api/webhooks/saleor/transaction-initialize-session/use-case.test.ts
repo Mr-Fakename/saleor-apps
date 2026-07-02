@@ -1,6 +1,6 @@
 import { err, ok } from "neverthrow";
 import Stripe from "stripe";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { mockedAppConfigRepo } from "@/__tests__/mocks/app-config-repo";
 import { mockedSaleorAppId } from "@/__tests__/mocks/constants";
@@ -29,10 +29,51 @@ import { TransactionRecorderError } from "@/modules/transactions-recording/repos
 import { TransactionInitializeSessionUseCase } from "./use-case";
 import { TransactionInitializeSessionUseCaseResponses } from "./use-case-response";
 
+/*
+ * The use case now updates the Saleor transaction with the Stripe PaymentIntent id
+ * as pspReference (via saleorApp.apl + a GraphQL transactionUpdate mutation).
+ * Mock both so unit tests don't hit the real APL / network.
+ */
+vi.mock("@/lib/saleor-app", () => ({
+  saleorApp: {
+    apl: {
+      get: vi.fn(async () => ({
+        token: "mocked-app-token",
+        saleorApiUrl: "https://foo.bar.saleor.cloud/graphql/",
+        appId: "mocked-saleor-app-id",
+      })),
+    },
+  },
+}));
+
+vi.mock("@/lib/graphql-client", () => ({
+  createInstrumentedGraphqlClient: vi.fn(() => ({
+    mutation: vi.fn(async () => ({
+      data: {
+        transactionUpdate: {
+          transaction: { id: "mocked-transaction-id" },
+          errors: [],
+        },
+      },
+    })),
+  })),
+}));
+
 describe("TransactionInitializeSessionUseCase", () => {
   const stripePaymentIntentsApiFactory = {
     create: () => mockedStripePaymentIntentsApi,
   } satisfies IStripePaymentIntentsApiFactory;
+
+  beforeEach(() => {
+    /*
+     * The use case first searches Stripe for existing payment intents attached to
+     * the checkout (checkout-resume support). Default: none found, so tests exercise
+     * the create-new-payment-intent path.
+     */
+    vi.mocked(mockedStripePaymentIntentsApi.searchPaymentIntentsByCheckout).mockResolvedValue(
+      ok([]),
+    );
+  });
 
   it.each([
     {

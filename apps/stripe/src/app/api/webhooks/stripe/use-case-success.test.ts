@@ -950,8 +950,7 @@ describe("StripeWebhookUseCase - handling charge.refund.updated event", () => {
         time: expect.toSatisfy(
           (d) => new Date(d).getTime() === new Date(event.data.object.created * 1000).getTime(),
         ),
-      },
-      `
+      }, `
       {
         "actions": [
           "REFUND",
@@ -962,13 +961,12 @@ describe("StripeWebhookUseCase - handling charge.refund.updated event", () => {
         },
         "externalUrl": "https://dashboard.stripe.com/refunds/re_TEST_TEST_TEST",
         "message": "Refund was successful",
-        "pspReference": "re_TEST_TEST_TEST",
+        "pspReference": "pi_TEST_TEST_TEST",
         "time": toSatisfy<[Function anonymous]>,
         "transactionId": "mocked-transaction-id",
         "type": "REFUND_SUCCESS",
       }
-    `,
-    );
+    `);
   });
 
   it("Reports REFUND_FAILURE transaction event when refund has status: failed", async () => {
@@ -1018,8 +1016,7 @@ describe("StripeWebhookUseCase - handling charge.refund.updated event", () => {
         time: expect.toSatisfy(
           (d) => new Date(d).getTime() === new Date(event.data.object.created * 1000).getTime(),
         ),
-      },
-      `
+      }, `
       {
         "actions": [
           "REFUND",
@@ -1030,13 +1027,12 @@ describe("StripeWebhookUseCase - handling charge.refund.updated event", () => {
         },
         "externalUrl": "https://dashboard.stripe.com/refunds/re_TEST_TEST_TEST",
         "message": "Refund failed",
-        "pspReference": "re_TEST_TEST_TEST",
+        "pspReference": "pi_TEST_TEST_TEST",
         "time": toSatisfy<[Function anonymous]>,
         "transactionId": "mocked-transaction-id",
         "type": "REFUND_FAILURE",
       }
-    `,
-    );
+    `);
   });
 
   it("Reports REFUND_REQUEST transaction event when refund has status: pending", async () => {
@@ -1086,8 +1082,7 @@ describe("StripeWebhookUseCase - handling charge.refund.updated event", () => {
         time: expect.toSatisfy(
           (d) => new Date(d).getTime() === new Date(event.data.object.created * 1000).getTime(),
         ),
-      },
-      `
+      }, `
       {
         "actions": [],
         "amount": SaleorMoney {
@@ -1096,13 +1091,12 @@ describe("StripeWebhookUseCase - handling charge.refund.updated event", () => {
         },
         "externalUrl": "https://dashboard.stripe.com/refunds/re_TEST_TEST_TEST",
         "message": "Refund is processing",
-        "pspReference": "re_TEST_TEST_TEST",
+        "pspReference": "pi_TEST_TEST_TEST",
         "time": toSatisfy<[Function anonymous]>,
         "transactionId": "mocked-transaction-id",
         "type": "REFUND_REQUEST",
       }
-    `,
-    );
+    `);
   });
 });
 

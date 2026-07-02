@@ -279,6 +279,9 @@ describe("ProductReview", () => {
           verifiedPurchase: true,
           createdAt: result.value.createdAt,
           modifiedAt: result.value.modifiedAt,
+          status: "pending", // New reviews start in pending moderation state
+          deletedAt: null,
+          productName: null,
         });
       }
     });

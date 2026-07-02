@@ -31,27 +31,23 @@ describe("Manifest handler", async () => {
         expect(body).toMatchInlineSnapshot(
           {
             version: expect.any(String),
-          },
-          `
+          }, `
           {
-            "about": "App that allows merchants using the Saleor e-commerce platform to accept online payments from customers using Stripe as their payment processor.",
+            "about": "App that allows merchants to accept online payments from customers using Stripe as their payment processor.",
             "appUrl": "https://localhost:3000",
-            "author": "Saleor Commerce",
+            "author": "Daybreak Development",
             "brand": {
               "logo": {
                 "default": "https://localhost:3000/logo.png",
               },
             },
-            "dataPrivacyUrl": "https://saleor.io/legal/privacy/",
             "extensions": [],
-            "homepageUrl": "https://github.com/saleor/apps",
             "id": "saleor.app.payment.stripe",
             "name": "Stripe",
             "permissions": [
               "HANDLE_PAYMENTS",
             ],
             "requiredSaleorVersion": ">=3.21 <4",
-            "supportUrl": "https://saleor.io/discord",
             "tokenTargetUrl": "https://localhost:3000/api/register",
             "version": Any<String>,
             "webhooks": [
@@ -111,8 +107,7 @@ describe("Manifest handler", async () => {
               },
             ],
           }
-        `,
-        );
+        `);
       },
     });
   });
