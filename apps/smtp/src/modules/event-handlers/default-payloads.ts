@@ -21,6 +21,7 @@ import {
   NotifyPayloadStaffOrderConfirmation,
   NotifyPayloadWithdrawalRequested,
 } from "../../lib/notify-event-types";
+import { getTrackingLinks } from "./get-tracking-links";
 import { MessageEventTypes } from "./message-event-types";
 
 const exampleOrderPayload: OrderDetailsFragment = {
@@ -217,8 +218,13 @@ const orderCancelledPayload: OrderCancelledWebhookPayloadFragment = {
   order: exampleOrderPayload,
 };
 
-const orderFulfilledPayload: OrderFulfilledWebhookPayloadFragment = {
-  order: exampleOrderPayload,
+const exampleFulfillments = [{ trackingNumber: "1111-1111-1111-1111" }];
+
+const orderFulfilledPayload: OrderFulfilledWebhookPayloadFragment & {
+  trackingLinks: ReturnType<typeof getTrackingLinks>;
+} = {
+  order: { ...exampleOrderPayload, fulfillments: exampleFulfillments },
+  trackingLinks: getTrackingLinks(exampleFulfillments),
 };
 
 const orderFullyPaidPayload: OrderFullyPaidWebhookPayloadFragment = {

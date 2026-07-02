@@ -56,6 +56,19 @@ const defaultOrderFulfilledMjmlTemplate = wrapEmail({
     greeting("Commande {{ order.number }}"),
     heading("Votre commande a été expédiée"),
     text("Bonne nouvelle — votre commande a été expédiée et arrive bientôt."),
+    // trackingLinks is injected by the order-fulfilled webhook handler
+    // (get-tracking-links.ts): [{ code, url }] per fulfillment with tracking.
+    `        {{#if trackingLinks}}{{#if (gt trackingLinks.length 0)}}`,
+    `        {{#each trackingLinks}}`,
+    panel(
+      `<p style="margin:0;color:${c.muted};font-size:12px;text-transform:uppercase;letter-spacing:0.06em;">Numéro de suivi</p>` +
+        `<p style="margin:6px 0 0;color:${c.ink};font-weight:600;font-size:16px;">{{ this.code }}</p>`,
+    ),
+    // Triple-stash: the URL is built by getTrackingLinks (trusted), and
+    // Handlebars escaping would mangle '=' into &#x3D; inside the href.
+    button("{{{ this.url }}}", "Suivre mon colis"),
+    `        {{/each}}`,
+    `        {{/if}}{{/if}}`,
     orderSummary(),
     addresses(),
   ].join("\n"),

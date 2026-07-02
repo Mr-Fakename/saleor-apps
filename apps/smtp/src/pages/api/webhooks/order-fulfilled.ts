@@ -11,6 +11,7 @@ import {
 } from "../../../../generated/graphql";
 import { createLogger } from "../../../logger";
 import { loggerContext } from "../../../logger-context";
+import { getTrackingLinks } from "../../../modules/event-handlers/get-tracking-links";
 import { SendEventMessagesUseCase } from "../../../modules/event-handlers/use-case/send-event-messages.use-case";
 import { SendEventMessagesUseCaseFactory } from "../../../modules/event-handlers/use-case/send-event-messages.use-case.factory";
 import { saleorApp } from "../../../saleor-app";
@@ -21,6 +22,9 @@ const OrderFulfilledWebhookPayload = gql`
   fragment OrderFulfilledWebhookPayload on OrderFulfilled {
     order {
       ...OrderDetails
+      fulfillments {
+        trackingNumber
+      }
     }
   }
 `;
@@ -78,12 +82,16 @@ const handler: NextJsWebhookHandler<OrderFulfilledWebhookPayloadFragment> = asyn
 
   const useCase = useCaseFactory.createFromAuthData(authData);
 
+  // Normalized carrier tracking links (staff paste either a full URL or a bare
+  // code into the Dashboard tracking field) — consumed by the email template.
+  const trackingLinks = getTrackingLinks(order.fulfillments);
+
   try {
     return useCase
       .sendEventMessages({
         channelSlug: channel,
         event: "ORDER_FULFILLED",
-        payload: { order: payload.order },
+        payload: { order: payload.order, trackingLinks },
         recipientEmail,
       })
       .then((result) =>
