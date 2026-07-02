@@ -1,0 +1,136 @@
+# OURS (not upstream) — builds the DEPLOYED apps to private GHCR with immutable
+# sha tags per the pipeline model (e-commerce-template/docs/adr/0007, runbook 05).
+# CI only BUILDS: deploys stay operator-driven via
+#   .ops/pipeline/deploy.sh <env> <service> sha-<gitsha>
+# Auth: repo secret GHCR_TOKEN = classic PAT with write:packages.
+# (Upgrade path: grant each GHCR package "Actions access" to this repo, then
+#  switch login password to secrets.GITHUB_TOKEN and drop the PAT.)
+name: Build deployment images
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/**"
+      - "packages/**"
+      - "Dockerfile"
+      - "pnpm-lock.yaml"
+  workflow_dispatch:
+    inputs:
+      app:
+        description: "App dir to build, or 'all'"
+        default: "all"
+
+concurrency:
+  group: build-images-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.filter.outputs.changes }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # "shared" matches cross-cutting inputs -> rebuild everything
+          filters: |
+            shared:
+              - "packages/**"
+              - "Dockerfile"
+              - "pnpm-lock.yaml"
+            smtp: ["apps/smtp/**"]
+            stripe: ["apps/stripe/**"]
+            checkout-prices: ["apps/checkout-prices/**"]
+            customer-extensions: ["apps/customer-extensions/**"]
+            digital-downloads: ["apps/digital-downloads/**"]
+            b2b-tax-manager: ["apps/b2b-tax-manager/**"]
+            invoices: ["apps/example-app-invoices/**"]
+
+  build:
+    needs: changes
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # image names match the live prod compose env (.ops/pipeline/images.map)
+          - { app: smtp,                image: saleor-app-smtp,         dir: apps/smtp }
+          - { app: stripe,              image: stripe-app,              dir: apps/stripe }
+          - { app: checkout-prices,     image: checkout-app,            dir: apps/checkout-prices }
+          - { app: customer-extensions, image: customer-extensions-app, dir: apps/customer-extensions }
+          - { app: digital-downloads,   image: digital-downloads-app,   dir: apps/digital-downloads }
+          - { app: b2b-tax-manager,     image: b2b-tax-manager-app,     dir: apps/b2b-tax-manager }
+          # invoices predates the monorepo root-Dockerfile pattern: standalone
+          # Dockerfile with the app dir as build context
+          - { app: invoices,            image: invoices-app,            dir: apps/example-app-invoices, standalone: true }
+    steps:
+      - name: Gate — should this app build?
+        id: gate
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            IN="${{ inputs.app }}"
+            { [ "$IN" = "all" ] || [ "$IN" = "${{ matrix.app }}" ]; } && GO=1 || GO=0
+          else
+            echo '${{ needs.changes.outputs.changed }}' | grep -qE '"shared"|"${{ matrix.app }}"' && GO=1 || GO=0
+          fi
+          echo "go=$GO" >> "$GITHUB_OUTPUT"
+          echo "build ${{ matrix.app }}: $GO"
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.go == '1'
+      - name: Setup pnpm + node
+        if: steps.gate.outputs.go == '1'
+        uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.go == '1'
+        with: { node-version: 22, cache: pnpm }
+      - name: Test gate (vitest, if the app has tests)
+        if: steps.gate.outputs.go == '1'
+        run: |
+          pnpm install --frozen-lockfile --filter "./${{ matrix.dir }}..."
+          pnpm --filter "./${{ matrix.dir }}" run --if-present test
+      - name: Short sha
+        if: steps.gate.outputs.go == '1'
+        id: sha
+        run: echo "short=$(git rev-parse --short=8 HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+        if: steps.gate.outputs.go == '1'
+      - uses: docker/login-action@v3
+        if: steps.gate.outputs.go == '1'
+        with:
+          registry: ghcr.io
+          username: mr-fakename
+          password: ${{ secrets.GHCR_TOKEN }}
+      - name: Build + push (monorepo root Dockerfile)
+        if: steps.gate.outputs.go == '1' && !matrix.standalone
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          target: runner
+          build-args: APP_NAME=${{ matrix.app }}
+          push: true
+          tags: ghcr.io/mr-fakename/${{ matrix.image }}:sha-${{ steps.sha.outputs.short }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,scope=${{ matrix.image }},mode=max
+      - name: Build + push (standalone Dockerfile)
+        if: steps.gate.outputs.go == '1' && matrix.standalone
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.dir }}
+          file: ${{ matrix.dir }}/Dockerfile
+          push: true
+          tags: ghcr.io/mr-fakename/${{ matrix.image }}:sha-${{ steps.sha.outputs.short }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,scope=${{ matrix.image }},mode=max
+      - name: Summary
+        if: steps.gate.outputs.go == '1'
+        run: |
+          echo "### \`${{ matrix.image }}:sha-${{ steps.sha.outputs.short }}\` pushed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Deploy: \`.ops/pipeline/deploy.sh staging ${{ matrix.app }} sha-${{ steps.sha.outputs.short }}\`" >> "$GITHUB_STEP_SUMMARY"
