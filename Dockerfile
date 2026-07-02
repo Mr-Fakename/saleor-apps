@@ -188,7 +188,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl --fail http://localhost:3000/api/health || exit 1
 
 # Create a startup script that can handle runtime APP_NAME selection
-COPY <<EOF /app/start-app.sh
+COPY --chmod=0755 <<EOF /app/start-app.sh
 #!/bin/bash
 set -e
 
@@ -233,7 +233,8 @@ else
 fi
 EOF
 
-RUN chmod +x /app/start-app.sh
+# chmod baked into the COPY above: RUN chmod as the non-root nextjs user
+# fails ('Operation not permitted') on the root-owned heredoc file under buildx
 
 # Start the application with dumb-init for proper signal handling
 ENTRYPOINT ["dumb-init", "--"]
