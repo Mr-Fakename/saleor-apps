@@ -49,5 +49,5 @@ apps/**/generated
 
 *.tsbuildinfo
 
-# generated files
-generated/
+# generated files — graphql.ts/schema.graphql are COMMITTED (CI tests import
+# them and this legacy app has no in-CI codegen step); regenerate via pnpm generate
