@@ -15,6 +15,7 @@ on:
       - "packages/**"
       - "Dockerfile"
       - "pnpm-lock.yaml"
+      - ".github/workflows/build-images.yml"
   workflow_dispatch:
     inputs:
       app:
@@ -45,6 +46,7 @@ jobs:
               - "packages/**"
               - "Dockerfile"
               - "pnpm-lock.yaml"
+              - ".github/workflows/build-images.yml"
             smtp: ["apps/smtp/**"]
             stripe: ["apps/stripe/**"]
             checkout-prices: ["apps/checkout-prices/**"]
@@ -93,7 +95,10 @@ jobs:
       - name: Test gate (vitest, if the app has tests)
         if: steps.gate.outputs.go == '1'
         run: |
-          pnpm install --frozen-lockfile --filter "./${{ matrix.dir }}..."
+          # full workspace install: filtered installs skip the shared packages'
+          # own deps (tslog/semver in packages/logger etc.) and vitest can't
+          # resolve them (learned on the first run)
+          pnpm install --frozen-lockfile
           pnpm --filter "./${{ matrix.dir }}" run --if-present test
       - name: Short sha
         if: steps.gate.outputs.go == '1'
