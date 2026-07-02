@@ -157,11 +157,13 @@ export default async function handler(
       return res.status(400).json({ errorMessage: "Product variant not found" });
     }
 
-    // Calculate price based on quantity (bulk pricing)
+    // Calculate price based on quantity (bulk pricing). Use the UNDISCOUNTED
+    // price as the base and only override when a tier applies; otherwise Saleor
+    // prices natively so catalog promotions aren't applied twice.
     const calculatedPrice = getVariantPrice(
       quantity,
       productVariant.quantityPricing,
-      productVariant.pricing?.price?.gross.amount
+      productVariant.pricing?.priceUndiscounted?.gross.amount
     );
 
     // Convert to string for GraphQL mutation

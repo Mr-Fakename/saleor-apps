@@ -191,7 +191,8 @@ export default async function handler(
   let connector1Price = 0;
   let connector2Price = 0;
   let connector3Price = 0;
-  let gainePrice = 0;
+  let gainePrice = 0; // scaled gaine charge (per-meter × length)
+  let gainePerMeterPrice = 0; // gaine per-meter reference rate
   let cableBasePrice = 0;
   let lengthPrice = 0;
 
@@ -219,9 +220,15 @@ export default async function handler(
     totalPrice += connector3Price;
   }
 
-  // Add gaine/sleeve price
+  // Gaine/sleeve per-meter reference rate (for transparency only — NOT added to total)
   if (gaineResult?.pricing?.price?.gross.amount) {
-    gainePrice = gaineResult.pricing.price.gross.amount;
+    gainePerMeterPrice = gaineResult.pricing.price.gross.amount;
+  }
+
+  // Calculate gaine cost (gaine price is per meter, like the cable) — this IS the gaine charge
+  if (gaineResult?.pricing?.price?.gross.amount && configuration.longueurCable) {
+    const lengthInMeters = configuration.longueurCable / 100;
+    gainePrice = gaineResult.pricing.price.gross.amount * lengthInMeters;
     totalPrice += gainePrice;
   }
 
@@ -282,6 +289,7 @@ export default async function handler(
       { key: "reference_gaine_id", value: configuration.referenceGaineId },
       { key: "reference_gaine_name", value: configuration.referenceGaineName },
       { key: "component_gaine_price", value: gainePrice.toFixed(2) },
+      { key: "component_gaine_per_meter_price", value: gainePerMeterPrice.toFixed(2) },
     );
   }
 

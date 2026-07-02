@@ -19,6 +19,12 @@ fragment VariantDetails on ProductVariant {
                 currency
             }
         }
+        priceUndiscounted{
+            gross{
+                amount
+                currency
+            }
+        }
     }
     quantityPricing: metafield(key: "quantityPricing")
 

@@ -28,10 +28,33 @@ type ErrorResponse = {
 
 export type PaymentFeeResponse = SuccessfulResponse | ErrorResponse;
 
+// This endpoint is called directly from the storefront browser (a client
+// component in the Stripe payment section), which is a different origin than the
+// app (e.g. dess-equipement.com -> checkout-prices.dess-equipement.com). A JSON
+// POST triggers a CORS preflight, so we must answer OPTIONS and echo the
+// allow-origin headers, otherwise the browser blocks the request and the fee is
+// silently never applied. No credentials are used (the app authenticates with
+// its own token), so reflecting the request Origin is safe and keeps the app
+// environment-agnostic.
+function setCorsHeaders(req: NextApiRequest, res: NextApiResponse) {
+  const origin = req.headers.origin;
+  res.setHeader("Access-Control-Allow-Origin", origin || "*");
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Max-Age", "86400");
+}
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<PaymentFeeResponse>
 ) {
+  setCorsHeaders(req, res);
+
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
+
   if (req.method !== "POST") {
     return res.status(405).json({ errorMessage: "Method not allowed" });
   }

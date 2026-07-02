@@ -90,11 +90,14 @@ export default async function handler(
   if (!checkoutId) {
     console.log("No checkout id provided - create a new checkout");
 
-    // Calculate price based on amount of items which will be added to the cart
+    // Calculate price based on amount of items which will be added to the cart.
+    // Only set a custom price when quantity-tier pricing actually applies;
+    // otherwise omit it so Saleor applies catalog promotions/taxes natively
+    // (passing the discounted price here would double-apply the discount).
     const price = getVariantPrice(
       quantity,
       productVariant.quantityPricing,
-      productVariant.pricing?.price?.gross.amount
+      productVariant.pricing?.priceUndiscounted?.gross.amount
     );
 
     const createCheckoutMutation = await client
@@ -105,7 +108,7 @@ export default async function handler(
             {
               quantity,
               variantId,
-              price,
+              ...(price !== undefined ? { price } : {}),
             },
           ],
         },
@@ -168,7 +171,7 @@ export default async function handler(
   const price = getVariantPrice(
     combinedQuantity,
     productVariant.quantityPricing,
-    productVariant.pricing?.price?.gross.amount
+    productVariant.pricing?.priceUndiscounted?.gross.amount
   );
 
   const addLinesMutation = await client
@@ -178,7 +181,7 @@ export default async function handler(
         {
           quantity,
           variantId,
-          price,
+          ...(price !== undefined ? { price } : {}),
         },
       ],
     })
