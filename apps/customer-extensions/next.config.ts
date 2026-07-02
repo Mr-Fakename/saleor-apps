@@ -14,7 +14,7 @@ const nextConfig: NextConfig = {
     "@saleor/apps-trpc",
   ],
   experimental: {
-    optimizePackageImports: ["@sentry/nextjs", "@sentry/node"],
+    optimizePackageImports: ["@sentry/nextjs"],
   },
   bundlePagesRouterDependencies: true,
   async headers() {
