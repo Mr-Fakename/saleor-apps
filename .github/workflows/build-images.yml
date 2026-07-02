@@ -69,9 +69,11 @@ jobs:
           - { app: customer-extensions, image: customer-extensions-app, dir: apps/customer-extensions }
           - { app: digital-downloads,   image: digital-downloads-app,   dir: apps/digital-downloads }
           - { app: b2b-tax-manager,     image: b2b-tax-manager-app,     dir: apps/b2b-tax-manager }
-          # invoices predates the monorepo root-Dockerfile pattern: standalone
-          # Dockerfile with the app dir as build context
-          - { app: invoices,            image: invoices-app,            dir: apps/example-app-invoices, standalone: true }
+          # invoices lives in a legacy dir name; built via the root Dockerfile
+          # like every sibling (its old standalone Dockerfile kept failing in
+          # CI: stale lockfile, then pnpm-10 build-script blocking with no
+          # workspace-level allow-list available)
+          - { app: invoices,            image: invoices-app,            dir: apps/example-app-invoices, app_name: example-app-invoices }
     steps:
       - name: Gate — should this app build?
         id: gate
@@ -113,23 +115,13 @@ jobs:
           username: mr-fakename
           password: ${{ secrets.GHCR_TOKEN }}
       - name: Build + push (monorepo root Dockerfile)
-        if: steps.gate.outputs.go == '1' && !matrix.standalone
+        if: steps.gate.outputs.go == '1'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
           target: runner
-          build-args: APP_NAME=${{ matrix.app }}
-          push: true
-          tags: ghcr.io/mr-fakename/${{ matrix.image }}:sha-${{ steps.sha.outputs.short }}
-          cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,scope=${{ matrix.image }},mode=max
-      - name: Build + push (standalone Dockerfile)
-        if: steps.gate.outputs.go == '1' && matrix.standalone
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ matrix.dir }}
-          file: ${{ matrix.dir }}/Dockerfile
+          build-args: APP_NAME=${{ matrix.app_name || matrix.app }}
           push: true
           tags: ghcr.io/mr-fakename/${{ matrix.image }}:sha-${{ steps.sha.outputs.short }}
           cache-from: type=gha,scope=${{ matrix.image }}
