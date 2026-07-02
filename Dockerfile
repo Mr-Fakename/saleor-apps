@@ -171,11 +171,11 @@ ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 
-# Copy entire built application (following original working approach)
+# Copy entire built application (following original working approach).
+# Ownership is set by --chown here — do NOT add a `RUN chown -R` after it:
+# it re-owns files that already have this exact ownership, and overlayfs
+# copies every file into a new layer (double image size, +12 min on Windows).
 COPY --from=builder --chown=nextjs:nodejs /app ./
-
-# Fix ownership for all files
-RUN chown -R nextjs:nodejs /app
 
 # Switch to non-root user
 USER nextjs
