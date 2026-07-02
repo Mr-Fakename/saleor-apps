@@ -14,6 +14,8 @@ export const notifyEventMapping: Record<string, MessageEventTypes> = {
   csv_export_failed: "CSV_EXPORT_FAILED",
   order_fulfillment_update: "ORDER_FULFILLMENT_UPDATE",
   staff_order_confirmation: "STAFF_ORDER_CONFIRMATION",
+  withdrawal_requested_customer: "WITHDRAWAL_REQUESTED_CUSTOMER",
+  withdrawal_requested_staff: "WITHDRAWAL_REQUESTED_STAFF",
 };
 
 interface IssuingPrincipal {
@@ -77,6 +79,14 @@ export type NotifySubscriptionPayload = {
   | {
       notify_event: "staff_order_confirmation";
       payload: NotifyPayloadStaffOrderConfirmation;
+    }
+  | {
+      notify_event: "withdrawal_requested_customer";
+      payload: NotifyPayloadWithdrawalRequested;
+    }
+  | {
+      notify_event: "withdrawal_requested_staff";
+      payload: NotifyPayloadWithdrawalRequested;
     }
 );
 
@@ -178,6 +188,25 @@ export interface NotifyPayloadStaffOrderConfirmation {
   recipient_email: string;
   recipient_list: string[];
   site_name: string;
+}
+
+export interface NotifyPayloadWithdrawalRequested {
+  channel_slug: string;
+  domain: string;
+  logo_url: string;
+  order_number: string;
+  order_created: string;
+  order_total: string;
+  order_currency: string;
+  recipient_email: string;
+  recipient_list?: string[];
+  reference: string;
+  requested_at: string;
+  reason: string;
+  customer_first_name: string;
+  customer_last_name: string;
+  site_name: string;
+  language_code: string;
 }
 
 interface User {

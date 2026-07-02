@@ -345,6 +345,8 @@ describe("POST /api/send", () => {
       to: "user@example.com",
       subject: "Test Subject",
       html: "<h1>Hello</h1>",
+      // multipart/alternative: a text/plain part is derived from the HTML
+      text: expect.any(String),
     });
   });
 
@@ -360,6 +362,8 @@ describe("POST /api/send", () => {
       host: "mailpit",
       port: 1025,
       secure: false,
+      requireTLS: true,
+      tls: { minVersion: "TLSv1.2" },
       auth: undefined,
     });
   });
@@ -379,6 +383,8 @@ describe("POST /api/send", () => {
       host: "mailpit",
       port: 1025,
       secure: false,
+      requireTLS: true,
+      tls: { minVersion: "TLSv1.2" },
       auth: { user: "user", pass: "pass" },
     });
   });

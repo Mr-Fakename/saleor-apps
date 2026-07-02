@@ -50,6 +50,9 @@ export const eventToWebhookMapping: Record<MessageEventTypes, AppWebhook> = {
   ORDER_REFUNDED: "orderRefundedWebhook",
   ORDER_FULFILLMENT_UPDATE: "notifyWebhook",
   STAFF_ORDER_CONFIRMATION: "notifyWebhook",
+  // Triggered directly via /api/send-event (not by Saleor); mapped to notifyWebhook for Record completeness.
+  WITHDRAWAL_REQUESTED_CUSTOMER: "notifyWebhook",
+  WITHDRAWAL_REQUESTED_STAFF: "notifyWebhook",
 };
 
 const logger = createLogger("WebhookManagementService");

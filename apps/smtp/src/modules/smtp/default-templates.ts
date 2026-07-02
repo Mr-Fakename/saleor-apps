@@ -1,483 +1,309 @@
 import { MessageEventTypes } from "../event-handlers/message-event-types";
+import {
+  addresses,
+  button,
+  c,
+  divider,
+  greeting,
+  heading,
+  orderSummary,
+  panel,
+  text,
+  wrapEmail,
+} from "./email-design-system";
 
-const addressSection = `<mj-section>
-  <mj-column>
-    <mj-table>
-      <thead>
-        <tr>
-          <th>
-            Billing address
-          </th>
-          <th>
-            Shipping address
-          </th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>
-            {{#if order.billingAddress}}
-              {{ order.billingAddress.streetAddress1 }}
-            {{else}}
-              No billing address
-            {{/if}}
-          </td>
-          <td>
-            {{#if order.shippingAddress}}
-              {{ order.shippingAddress.streetAddress1}}
-            {{else}}
-              No shipping required
-            {{/if}}
-          </td>
-        </tr>
-      </tbody>
-    </mj-table>
-  </mj-column>
-</mj-section>
-`;
+/**
+ * Default MJML templates for every transactional email the SMTP app sends.
+ *
+ * All chrome (logo header, brand palette, card, footer, dark-mode, responsive
+ * layout) comes from ../email-design-system.ts — these templates only declare
+ * their unique content. That is the consolidation: one design system, applied
+ * everywhere, so the emails look and feel like the Dess storefront.
+ *
+ * Handlebars variables are preserved exactly. Note the two field-casing worlds:
+ * GraphQL webhook payloads use camelCase (order.lines, totalPrice.gross.amount),
+ * while NOTIFY payloads (ORDER_FULFILLMENT_UPDATE, STAFF_ORDER_CONFIRMATION) use
+ * snake_case — hence orderSummary({ snake }) / addresses({ snake }).
+ */
 
-const addressSectionForNotify = `<mj-section>
-  <mj-column>
-    <mj-table>
-      <thead>
-        <tr>
-          <th>
-            Billing address
-          </th>
-          <th>
-            Shipping address
-          </th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>
-            {{#if order.billing_address}}
-              {{ order.billing_address.street_address_1 }}
-            {{else}}
-              No billing address
-            {{/if}}
-          </td>
-          <td>
-            {{#if order.shipping_address}}
-              {{ order.shipping_address.street_address_1}}
-            {{else}}
-              No shipping required
-            {{/if}}
-          </td>
-        </tr>
-      </tbody>
-    </mj-table>
-  </mj-column>
-</mj-section>
-`;
+// --- Orders (camelCase webhook payloads) -----------------------------------
 
-const orderLinesSection = `<mj-section>
-  <mj-column>
-    <mj-table>
-      <tbody>
-        {{#each order.lines }}
-          <tr>
-            <td>
-              {{ this.quantity }} x {{ this.productName }} - {{ this.variantName }}
-            </td>
-            <td align="right">
-              {{ this.totalPrice.gross.amount }} {{ this.totalPrice.gross.currency }}
-            </td>
-          </tr>
-        {{/each}}
-        <tr>
-          <td>
-          </td>
-          <td align="right">
-            Shipping: {{ order.shippingPrice.gross.amount }} {{ order.shippingPrice.gross.currency }}
-          </td>
-        </tr>
-        <tr>
-          <td>
-          </td>
-          <td align="right">
-            Total: {{ order.total.gross.amount }} {{ order.total.gross.currency }}
-          </td>
-        </tr>
-      </tbody>
-    </mj-table>
-  </mj-column>
-</mj-section>
-`;
+const defaultOrderCreatedMjmlTemplate = wrapEmail({
+  preheader: "Merci pour votre commande — nous la préparons.",
+  body: [
+    greeting("Commande {{ order.number }}"),
+    heading("Merci pour votre commande !"),
+    text("Bonjour, nous avons bien reçu votre commande et la préparons avec soin. Voici le récapitulatif :"),
+    orderSummary(),
+    addresses(),
+  ].join("\n"),
+});
 
-const defaultOrderCreatedMjmlTemplate = `<mjml>
-  <mj-body>
-    <mj-section>
-      <mj-column>
-        <mj-text font-size="16px">
-          Hello!
-        </mj-text>
-        <mj-text>
-          Order {{ order.number }} has been created.
-        </mj-text>
-      </mj-column>
-    </mj-section>
-    ${addressSection}
-    ${orderLinesSection}
-  </mj-body>
-</mjml>`;
+const defaultOrderConfirmedMjmlTemplate = wrapEmail({
+  preheader: "Votre commande est confirmée.",
+  body: [
+    greeting("Commande {{ order.number }}"),
+    heading("Votre commande est confirmée"),
+    text("Bonjour, votre commande est confirmée et entre en préparation. Voici le récapitulatif :"),
+    orderSummary(),
+    addresses(),
+  ].join("\n"),
+});
 
-const defaultOrderFulfilledMjmlTemplate = `<mjml>
-  <mj-body>
-    <mj-section>
-      <mj-column>
-        <mj-text font-size="16px">
-          Hello!
-        </mj-text>
-        <mj-text>
-          Order {{ order.number }} has been fulfilled.
-        </mj-text>
-      </mj-column>
-    </mj-section>
-    ${addressSection}
-    ${orderLinesSection}
-  </mj-body>
-</mjml>`;
+const defaultOrderFulfilledMjmlTemplate = wrapEmail({
+  preheader: "Votre commande est en route.",
+  body: [
+    greeting("Commande {{ order.number }}"),
+    heading("Votre commande a été expédiée"),
+    text("Bonne nouvelle — votre commande a été expédiée et arrive bientôt."),
+    orderSummary(),
+    addresses(),
+  ].join("\n"),
+});
 
-const defaultOrderConfirmedMjmlTemplate = `<mjml>
-  <mj-body>
-    <mj-section>
-      <mj-column>
-        <mj-text font-size="16px">
-        Hello!
-        </mj-text>
-        <mj-text>
-          Order {{ order.number}} has been confirmed.
-        </mj-text>
-      </mj-column>
-    </mj-section>
-    ${addressSection}
-    ${orderLinesSection}
-    </mj-body>
-</mjml>`;
+const defaultOrderFullyPaidMjmlTemplate = wrapEmail({
+  preheader: "Paiement reçu — merci.",
+  body: [
+    greeting("Commande {{ order.number }}"),
+    heading("Paiement confirmé"),
+    text("Merci, nous avons bien reçu votre paiement. Voici le récapitulatif de votre commande :"),
+    orderSummary(),
+    addresses(),
+    `        {{#if downloadLinks}}{{#if (gt downloadLinks.length 0)}}`,
+    divider(),
+    text(`<strong style="color:${c.ink};">Vos téléchargements numériques</strong>`, "0 0 6px"),
+    text("Cliquez sur chaque lien pour télécharger vos produits. Les liens expirent à la date indiquée."),
+    `        {{#each downloadLinks}}`,
+    panel(
+      `<p style="margin:0 0 10px;color:${c.ink};font-weight:600;font-size:14px;">{{ this.productName }}{{#if this.variantName}} — {{ this.variantName }}{{/if}}</p>` +
+        `<a href="{{ this.downloadUrl }}" style="display:inline-block;background:${c.accent};color:#ffffff;font-size:14px;font-weight:600;text-decoration:none;padding:11px 24px;border-radius:10px;">Télécharger</a>` +
+        `<p style="margin:10px 0 0;color:${c.muted};font-size:12px;">Expire le : {{ this.expiresAt }}</p>`,
+    ),
+    `        {{/each}}`,
+    `        {{/if}}{{/if}}`,
+  ].join("\n"),
+});
 
-const defaultOrderFullyPaidMjmlTemplate = `<mjml>
-  <mj-body>
-    <mj-section>
-      <mj-column>
-        <mj-text font-size="16px">
-          Hello!
-        </mj-text>
-        <mj-text>
-          Order {{ order.number }} has been fully paid.
-        </mj-text>
-      </mj-column>
-    </mj-section>
-    ${addressSection}
-    ${orderLinesSection}
-    {{#if downloadLinks}}
-      {{#if (gt downloadLinks.length 0)}}
-        <mj-section background-color="#f0f9ff">
-          <mj-column>
-            <mj-text font-size="18px" font-weight="bold" padding-bottom="10px">
-              Your Digital Downloads
-            </mj-text>
-            <mj-text>
-              Click the links below to download your digital products. These links will expire on the date shown.
-            </mj-text>
-          </mj-column>
-        </mj-section>
-        {{#each downloadLinks}}
-          <mj-section background-color="#ffffff" padding="10px">
-            <mj-column>
-              <mj-text font-weight="bold" padding-bottom="5px">
-                {{ this.productName }}{{#if this.variantName}} - {{ this.variantName }}{{/if}}
-              </mj-text>
-              <mj-button href="{{ this.downloadUrl }}" background-color="#3b82f6" color="white" font-size="14px" padding="10px 0">
-                Download Now
-              </mj-button>
-              <mj-text font-size="12px" color="#6b7280" padding-top="5px">
-                Expires: {{ this.expiresAt }}
-              </mj-text>
-            </mj-column>
-          </mj-section>
-        {{/each}}
-      {{/if}}
-    {{/if}}
-  </mj-body>
-</mjml>`;
+const defaultOrderRefundedMjmlTemplate = wrapEmail({
+  preheader: "Votre remboursement a été effectué.",
+  body: [
+    greeting("Commande {{ order.number }}"),
+    heading("Votre remboursement a été effectué"),
+    text("Bonjour, votre remboursement a été traité. Selon votre banque, il peut prendre quelques jours ouvrés pour apparaître sur votre compte."),
+    orderSummary(),
+    addresses(),
+  ].join("\n"),
+});
 
-const defaultOrderRefundedMjmlTemplate = `<mjml>
-  <mj-body>
-    <mj-section>
-      <mj-column>
-        <mj-text font-size="16px">
-          Hello!
-        </mj-text>
-        <mj-text>
-          Order {{ order.number }} has been refunded.
-        </mj-text>
-      </mj-column>
-    </mj-section>
-    ${addressSection}
-    ${orderLinesSection}  
-  </mj-body>
-</mjml>`;
+const defaultOrderCancelledMjmlTemplate = wrapEmail({
+  preheader: "Votre commande a été annulée.",
+  body: [
+    greeting("Commande {{ order.number }}"),
+    heading("Votre commande a été annulée"),
+    text("Bonjour, votre commande a été annulée. Si un paiement a été effectué, il vous sera remboursé. Pour toute question, répondez simplement à cet e-mail."),
+    orderSummary(),
+    addresses(),
+  ].join("\n"),
+});
 
-const defaultOrderCancelledMjmlTemplate = `<mjml>
-  <mj-body>
-    <mj-section>
-      <mj-column>
-        <mj-text font-size="16px">
-            Hello!
-        </mj-text>
-        <mj-text>
-          Order {{ order.number }} has been cancelled.
-        </mj-text>
-      </mj-column>
-    </mj-section>
-    ${addressSection}
-    ${orderLinesSection}
-  </mj-body>
-</mjml>`;
+// --- Order (NOTIFY payload — snake_case) ------------------------------------
 
-const defaultInvoiceSentMjmlTemplate = `<mjml>
-  <mj-body>
-    <mj-section>
-      <mj-column>
-        <mj-text font-size="16px">
-          Hi!
-        </mj-text>
-        <mj-text>
-          New invoice has been created
-        </mj-text>
-      </mj-column>
-    </mj-section>
-  </mj-body>
-</mjml>`;
+const defaultOrderFulfillmentUpdatedMjmlTemplate = wrapEmail({
+  preheader: "Mise à jour de votre livraison.",
+  body: [
+    greeting("Commande {{ order.number }}"),
+    heading("Mise à jour de votre livraison"),
+    text("Bonjour, le suivi de votre commande a été mis à jour."),
+    `        {{#if fulfillment.tracking_number}}`,
+    panel(
+      `<p style="margin:0;color:${c.muted};font-size:12px;text-transform:uppercase;letter-spacing:0.06em;">Numéro de suivi</p>` +
+        `<p style="margin:6px 0 0;color:${c.ink};font-weight:600;font-size:16px;">{{ fulfillment.tracking_number }}</p>`,
+    ),
+    `        {{/if}}`,
+    addresses({ snake: true }),
+  ].join("\n"),
+});
 
-// TODO: Improve the template
-const defaultGiftCardSentMjmlTemplate = `<mjml>
-  <mj-body>
-    <mj-section>
-      <mj-column>
-        <mj-text font-size="16px">
-          Hi!
-        </mj-text>
-        <mj-text>
-          Heres your gift card
-        </mj-text>
-      </mj-column>
-    </mj-section>
-  </mj-body>
-</mjml>`;
+// --- Invoice / gift card ----------------------------------------------------
 
-const defaultAccountConfirmationMjmlTemplate = `<mjml>
-  <mj-body>
-    <mj-section>
-      <mj-column>
-        <mj-text font-size="16px">
-          Hi {{user.first_name}}!
-        </mj-text>
-        <mj-text>
-          Your account has been created. Please follow the link to activate it: 
-        </mj-text>
-        <mj-button href="{{confirm_url}}"  background-color="black" color="white" padding-top="50px" inner-padding="20px" width="70%">
-            Activate the account 
-        </mj-button>
-      </mj-column>
-    </mj-section>
-  </mj-body>
-</mjml>`;
+const defaultInvoiceSentMjmlTemplate = wrapEmail({
+  preheader: "Votre facture est disponible.",
+  body: [
+    greeting("Facturation"),
+    heading("Votre facture est disponible"),
+    text("Bonjour, une nouvelle facture a été émise pour votre commande. Vous la trouverez en pièce jointe ou dans votre espace client."),
+  ].join("\n"),
+});
 
-const defaultAccountPasswordResetMjmlTemplate = `<mjml>
-  <mj-body>
-    <mj-section>
-      <mj-column>
-        <mj-text font-size="16px">
-          Hi {{user.first_name}}!
-        </mj-text>
-        <mj-text>
-          Password reset has been requested. Please follow the link to proceed: 
-        </mj-text>
-        <mj-button href="{{reset_url}}"  background-color="black" color="white" padding-top="50px" inner-padding="20px" width="70%">
-            Reset the password 
-        </mj-button>
-      </mj-column>
-    </mj-section>
-  </mj-body>
-</mjml>`;
+const defaultGiftCardSentMjmlTemplate = wrapEmail({
+  preheader: "Une carte cadeau vous a été envoyée.",
+  body: [
+    greeting("Carte cadeau"),
+    heading("Votre carte cadeau Dess"),
+    text("Bonjour, une carte cadeau vous a été envoyée. Utilisez-la lors de votre prochaine commande sur notre boutique."),
+    button("https://www.dess-equipement.com", "Découvrir la boutique"),
+  ].join("\n"),
+});
 
-const defaultAccountChangeEmailRequestMjmlTemplate = `<mjml>
-  <mj-body>
-    <mj-section>
-      <mj-column>
-        <mj-text font-size="16px">
-          Hi {{user.first_name}}!
-        </mj-text>
-        <mj-text>
-          Email address change has been requested. If you want to confirm changing the email address to {{new_email}}, please follow the link: 
-        </mj-text>
-        <mj-button href="{{redirect_url}}"  background-color="black" color="white" padding-top="50px" inner-padding="20px" width="70%">
-            Change the email
-        </mj-button>
-      </mj-column>
-    </mj-section>
-  </mj-body>
-</mjml>`;
+// --- Account (snake_case user payloads) -------------------------------------
 
-const defaultAccountChangeEmailConfirmationMjmlTemplate = `<mjml>
-  <mj-body>
-    <mj-section>
-      <mj-column>
-        <mj-text font-size="16px">
-          Hi {{user.first_name}}!
-        </mj-text>
-        <mj-text>
-          Email address change has been confirmed.
-        </mj-text>
-      </mj-column>
-    </mj-section>
-  </mj-body>
-</mjml>`;
+const defaultAccountConfirmationMjmlTemplate = wrapEmail({
+  preheader: "Activez votre compte Dess.",
+  body: [
+    greeting("Votre compte"),
+    heading("Activez votre compte"),
+    text("Bonjour {{ user.first_name }}, bienvenue chez Dess. Cliquez ci-dessous pour activer votre compte."),
+    button("{{ confirm_url }}", "Activer mon compte"),
+    text(`Si vous n'êtes pas à l'origine de cette demande, ignorez simplement cet e-mail.`, "12px 0 0"),
+  ].join("\n"),
+});
 
-const defaultAccountDeleteMjmlTemplate = `<mjml>
-  <mj-body>
-    <mj-section>
-      <mj-column>
-        <mj-text font-size="16px">
-          Hi {{user.first_name}}!
-        </mj-text>
-        <mj-text>
-          Account deletion has been requested. If you want to confirm, please follow the link: 
-        </mj-text>
-        <mj-button href="{{redirect_url}}"  background-color="black" color="white" padding-top="50px" inner-padding="20px" width="70%">
-            Delete the account
-        </mj-button>
-      </mj-column>
-    </mj-section>
-  </mj-body>
-</mjml>`;
+const defaultAccountPasswordResetMjmlTemplate = wrapEmail({
+  preheader: "Réinitialisez votre mot de passe.",
+  body: [
+    greeting("Sécurité"),
+    heading("Réinitialisation du mot de passe"),
+    text("Bonjour {{ user.first_name }}, vous avez demandé à réinitialiser votre mot de passe. Cliquez ci-dessous pour en choisir un nouveau."),
+    button("{{ reset_url }}", "Réinitialiser le mot de passe"),
+    text(`Si vous n'avez pas demandé cette réinitialisation, ignorez cet e-mail — votre mot de passe reste inchangé.`, "12px 0 0"),
+  ].join("\n"),
+});
 
-const defaultOrderFulfillmentUpdatedMjmlTemplate = `<mjml>
-  <mj-body>
-    <mj-section>
-      <mj-column>
-        <mj-text font-size="16px">
-            Hello!
-        </mj-text>
-        <mj-text>
-          Fulfillment for the order {{ order.number }} has been updated.
-        </mj-text>
-        {{#if fulfillment.tracking_number }}
-          <mj-text>
-            Tracking number: {{ fulfillment.tracking_number }}
-          </mj-text>
-        {{/if}}
-      </mj-column>
-    </mj-section>
-    ${addressSectionForNotify}
-  </mj-body>
-</mjml>`;
+const defaultAccountChangeEmailRequestMjmlTemplate = wrapEmail({
+  preheader: "Confirmez votre nouvelle adresse e-mail.",
+  body: [
+    greeting("Votre compte"),
+    heading("Confirmez votre nouvelle adresse"),
+    text("Bonjour {{ user.first_name }}, vous avez demandé à modifier votre adresse e-mail en <strong>{{ new_email }}</strong>. Cliquez ci-dessous pour confirmer."),
+    button("{{ redirect_url }}", "Confirmer le changement"),
+  ].join("\n"),
+});
 
-const defaultAccountSetCustomerPasswordMjmlTemplate = `<mjml>
-  <mj-body>
-    <mj-section>
-      <mj-column>
-        <mj-text font-size="16px">
-          Hi {{user.first_name}}!
-        </mj-text>
-        <mj-text>
-          Your account has been created. Please set your password by following the link below:
-        </mj-text>
-        <mj-button href="{{password_set_url}}" background-color="black" color="white" padding-top="50px" inner-padding="20px" width="70%">
-            Set your password
-        </mj-button>
-      </mj-column>
-    </mj-section>
-  </mj-body>
-</mjml>`;
+const defaultAccountChangeEmailConfirmationMjmlTemplate = wrapEmail({
+  preheader: "Votre adresse e-mail a été modifiée.",
+  body: [
+    greeting("Votre compte"),
+    heading("Adresse e-mail modifiée"),
+    text("Bonjour {{ user.first_name }}, votre adresse e-mail a été modifiée avec succès."),
+  ].join("\n"),
+});
 
-const defaultAccountSetStaffPasswordMjmlTemplate = `<mjml>
-  <mj-body>
-    <mj-section>
-      <mj-column>
-        <mj-text font-size="16px">
-          Hi {{user.first_name}}!
-        </mj-text>
-        <mj-text>
-          Your staff account has been created. Please set your password by following the link below:
-        </mj-text>
-        <mj-button href="{{password_set_url}}" background-color="black" color="white" padding-top="50px" inner-padding="20px" width="70%">
-            Set your password
-        </mj-button>
-      </mj-column>
-    </mj-section>
-  </mj-body>
-</mjml>`;
+const defaultAccountDeleteMjmlTemplate = wrapEmail({
+  preheader: "Confirmez la suppression de votre compte.",
+  body: [
+    greeting("Votre compte"),
+    heading("Confirmer la suppression"),
+    text("Bonjour {{ user.first_name }}, vous avez demandé la suppression de votre compte. Cliquez ci-dessous pour confirmer. Cette action est définitive."),
+    button("{{ redirect_url }}", "Supprimer mon compte"),
+  ].join("\n"),
+});
 
-const defaultAccountStaffResetPasswordMjmlTemplate = `<mjml>
-  <mj-body>
-    <mj-section>
-      <mj-column>
-        <mj-text font-size="16px">
-          Hi {{user.first_name}}!
-        </mj-text>
-        <mj-text>
-          A password reset has been requested for your staff account. Please follow the link to proceed:
-        </mj-text>
-        <mj-button href="{{reset_url}}" background-color="black" color="white" padding-top="50px" inner-padding="20px" width="70%">
-            Reset the password
-        </mj-button>
-      </mj-column>
-    </mj-section>
-  </mj-body>
-</mjml>`;
+const defaultAccountSetCustomerPasswordMjmlTemplate = wrapEmail({
+  preheader: "Définissez votre mot de passe.",
+  body: [
+    greeting("Votre compte"),
+    heading("Définissez votre mot de passe"),
+    text("Bonjour {{ user.first_name }}, votre compte a été créé. Choisissez votre mot de passe pour commencer."),
+    button("{{ password_set_url }}", "Définir mon mot de passe"),
+  ].join("\n"),
+});
 
-const defaultCsvExportSuccessMjmlTemplate = `<mjml>
-  <mj-body>
-    <mj-section>
-      <mj-column>
-        <mj-text font-size="16px">
-          Hi!
-        </mj-text>
-        <mj-text>
-          Your CSV export is ready. Click the link below to download it:
-        </mj-text>
-        <mj-button href="{{csv_link}}" background-color="black" color="white" padding-top="50px" inner-padding="20px" width="70%">
-            Download CSV
-        </mj-button>
-      </mj-column>
-    </mj-section>
-  </mj-body>
-</mjml>`;
+const defaultAccountSetStaffPasswordMjmlTemplate = wrapEmail({
+  preheader: "Définissez le mot de passe de votre compte.",
+  body: [
+    greeting("Équipe Dess"),
+    heading("Définissez votre mot de passe"),
+    text("Bonjour {{ user.first_name }}, votre compte équipe a été créé. Choisissez votre mot de passe pour accéder au tableau de bord."),
+    button("{{ password_set_url }}", "Définir mon mot de passe"),
+  ].join("\n"),
+});
 
-const defaultCsvExportFailedMjmlTemplate = `<mjml>
-  <mj-body>
-    <mj-section>
-      <mj-column>
-        <mj-text font-size="16px">
-          Hi!
-        </mj-text>
-        <mj-text>
-          Unfortunately, your CSV export has failed. Please try again or contact support if the issue persists.
-        </mj-text>
-      </mj-column>
-    </mj-section>
-  </mj-body>
-</mjml>`;
+const defaultAccountStaffResetPasswordMjmlTemplate = wrapEmail({
+  preheader: "Réinitialisation du mot de passe (équipe).",
+  body: [
+    greeting("Équipe Dess"),
+    heading("Réinitialisation du mot de passe"),
+    text("Bonjour {{ user.first_name }}, une réinitialisation du mot de passe a été demandée pour votre compte équipe. Cliquez ci-dessous pour continuer."),
+    button("{{ reset_url }}", "Réinitialiser le mot de passe"),
+  ].join("\n"),
+});
 
-const defaultStaffOrderConfirmationMjmlTemplate = `<mjml>
-  <mj-body>
-    <mj-section>
-      <mj-column>
-        <mj-text font-size="16px">
-          New order received!
-        </mj-text>
-        <mj-text>
-          Order {{ order.number }} has been placed by {{ order.email }}.
-        </mj-text>
-      </mj-column>
-    </mj-section>
-    ${addressSectionForNotify}
-  </mj-body>
-</mjml>`;
+// --- CSV exports (staff) ----------------------------------------------------
+
+const defaultCsvExportSuccessMjmlTemplate = wrapEmail({
+  preheader: "Votre export CSV est prêt.",
+  body: [
+    greeting("Export"),
+    heading("Votre export CSV est prêt"),
+    text("Votre export CSV est terminé. Cliquez ci-dessous pour le télécharger."),
+    button("{{ csv_link }}", "Télécharger le CSV"),
+  ].join("\n"),
+});
+
+const defaultCsvExportFailedMjmlTemplate = wrapEmail({
+  preheader: "Votre export CSV a échoué.",
+  body: [
+    greeting("Export"),
+    heading("Échec de l'export CSV"),
+    text("Malheureusement, votre export CSV a échoué. Veuillez réessayer ou contacter le support si le problème persiste."),
+  ].join("\n"),
+});
+
+// --- Withdrawal / right of retraction (FR — legal copy preserved) -----------
+
+const defaultWithdrawalRequestedCustomerMjmlTemplate = wrapEmail({
+  preheader: "Confirmation de votre demande de rétractation.",
+  body: [
+    greeting("Rétractation"),
+    heading("Confirmation de votre demande de rétractation"),
+    text("Bonjour {{ customer_first_name }},"),
+    text("Nous avons bien reçu votre demande de rétractation concernant la commande n°{{ order_number }} passée le {{ order_created }}."),
+    panel(
+      `<p style="margin:0;color:${c.body};font-size:14px;line-height:1.7;"><strong style="color:${c.ink};">Référence de votre demande :</strong> {{ reference }}<br/>` +
+        `<strong style="color:${c.ink};">Date de la demande :</strong> {{ requested_at }}</p>`,
+    ),
+    `        {{#if reason}}`,
+    text("<strong>Motif indiqué :</strong> {{ reason }}"),
+    `        {{/if}}`,
+    text(`<strong style="color:${c.ink};">Prochaines étapes</strong>`, "12px 0 6px"),
+    text("Vous disposez de 14 jours à compter de la réception de votre commande pour nous retourner les produits. Veuillez les renvoyer <strong>à l'état neuf, dans leur emballage d'origine</strong>, à l'adresse qui vous sera communiquée dans un email de suivi."),
+    text("Le remboursement sera effectué manuellement après réception et contrôle des articles. Nous nous réservons le droit de refuser le remboursement ou d'appliquer un remboursement partiel si les produits présentent des signes d'utilisation, de dommage ou si leur emballage d'origine est manquant."),
+    text("Conformément au droit de rétractation (articles L.221-18 et suivants du Code de la consommation), aucune justification n'est requise. Cet email constitue la confirmation de la prise en compte de votre demande sur un support durable."),
+  ].join("\n"),
+});
+
+const defaultWithdrawalRequestedStaffMjmlTemplate = wrapEmail({
+  preheader: "Nouvelle demande de rétractation à traiter.",
+  body: [
+    greeting("Rétractation — équipe"),
+    heading("Nouvelle demande de rétractation"),
+    text("Une demande de rétractation vient d'être enregistrée et doit être traitée manuellement."),
+    panel(
+      `<p style="margin:0;color:${c.body};font-size:14px;line-height:1.7;">` +
+        `<strong style="color:${c.ink};">Référence :</strong> {{ reference }}<br/>` +
+        `<strong style="color:${c.ink};">Commande :</strong> n°{{ order_number }} ({{ order_total }} {{ order_currency }})<br/>` +
+        `<strong style="color:${c.ink};">Commande passée le :</strong> {{ order_created }}<br/>` +
+        `<strong style="color:${c.ink};">Client :</strong> {{ customer_first_name }} {{ customer_last_name }} &lt;{{ recipient_email }}&gt;<br/>` +
+        `<strong style="color:${c.ink};">Demandé le :</strong> {{ requested_at }}</p>`,
+    ),
+    `        {{#if reason}}`,
+    text("<strong>Motif indiqué par le client :</strong><br/>{{ reason }}"),
+    `        {{/if}}`,
+    text(`La demande est stampée dans les métadonnées de la commande (clé <code>withdrawal.requestedAt</code>). Traitez le remboursement depuis le Dashboard après réception et contrôle des produits.`),
+  ].join("\n"),
+});
+
+// --- Staff order confirmation (NOTIFY payload — snake_case) ------------------
+
+const defaultStaffOrderConfirmationMjmlTemplate = wrapEmail({
+  preheader: "Nouvelle commande reçue.",
+  body: [
+    greeting("Nouvelle commande"),
+    heading("Nouvelle commande reçue"),
+    text("La commande n°{{ order.number }} a été passée par {{ order.email }}."),
+    addresses({ snake: true }),
+  ].join("\n"),
+});
 
 export const defaultMjmlTemplates: Record<MessageEventTypes, string> = {
   ACCOUNT_CHANGE_EMAIL_CONFIRM: defaultAccountChangeEmailConfirmationMjmlTemplate,
@@ -500,27 +326,31 @@ export const defaultMjmlTemplates: Record<MessageEventTypes, string> = {
   ORDER_FULLY_PAID: defaultOrderFullyPaidMjmlTemplate,
   ORDER_REFUNDED: defaultOrderRefundedMjmlTemplate,
   STAFF_ORDER_CONFIRMATION: defaultStaffOrderConfirmationMjmlTemplate,
+  WITHDRAWAL_REQUESTED_CUSTOMER: defaultWithdrawalRequestedCustomerMjmlTemplate,
+  WITHDRAWAL_REQUESTED_STAFF: defaultWithdrawalRequestedStaffMjmlTemplate,
 };
 
 export const defaultMjmlSubjectTemplates: Record<MessageEventTypes, string> = {
-  ACCOUNT_CHANGE_EMAIL_CONFIRM: "Email change confirmation",
-  ACCOUNT_CHANGE_EMAIL_REQUEST: "Email change request",
-  ACCOUNT_CONFIRMATION: "Account activation",
-  ACCOUNT_DELETE: "Account deletion",
-  ACCOUNT_PASSWORD_RESET: "Password reset request",
-  ACCOUNT_SET_CUSTOMER_PASSWORD: "Set your account password",
-  ACCOUNT_SET_STAFF_PASSWORD: "Set your staff account password",
-  ACCOUNT_STAFF_RESET_PASSWORD: "Staff password reset request",
-  CSV_EXPORT_SUCCESS: "Your CSV export is ready",
-  CSV_EXPORT_FAILED: "CSV export failed",
-  GIFT_CARD_SENT: "Gift card",
-  INVOICE_SENT: "New invoice has been created",
-  ORDER_CANCELLED: "Order {{ order.number }} has been cancelled",
-  ORDER_CONFIRMED: "Order {{ order.number }} has been confirmed",
-  ORDER_CREATED: "Order {{ order.number }} has been created",
-  ORDER_FULFILLED: "Order {{ order.number }} has been fulfilled",
-  ORDER_FULFILLMENT_UPDATE: "Fulfillment for order {{ order.number }} has been updated",
-  ORDER_FULLY_PAID: "Order {{ order.number }} has been fully paid",
-  ORDER_REFUNDED: "Order {{ order.number }} has been refunded",
-  STAFF_ORDER_CONFIRMATION: "New order {{ order.number }} received",
+  ACCOUNT_CHANGE_EMAIL_CONFIRM: "Changement d'adresse e-mail confirmé",
+  ACCOUNT_CHANGE_EMAIL_REQUEST: "Confirmez votre nouvelle adresse e-mail",
+  ACCOUNT_CONFIRMATION: "Activez votre compte Dess",
+  ACCOUNT_DELETE: "Confirmez la suppression de votre compte",
+  ACCOUNT_PASSWORD_RESET: "Réinitialisation de votre mot de passe",
+  ACCOUNT_SET_CUSTOMER_PASSWORD: "Définissez votre mot de passe",
+  ACCOUNT_SET_STAFF_PASSWORD: "Définissez le mot de passe de votre compte équipe",
+  ACCOUNT_STAFF_RESET_PASSWORD: "Réinitialisation du mot de passe (équipe)",
+  CSV_EXPORT_SUCCESS: "Votre export CSV est prêt",
+  CSV_EXPORT_FAILED: "Échec de votre export CSV",
+  GIFT_CARD_SENT: "Votre carte cadeau Dess",
+  INVOICE_SENT: "Votre facture est disponible",
+  ORDER_CANCELLED: "Votre commande {{ order.number }} a été annulée",
+  ORDER_CONFIRMED: "Votre commande {{ order.number }} est confirmée",
+  ORDER_CREATED: "Merci pour votre commande {{ order.number }}",
+  ORDER_FULFILLED: "Votre commande {{ order.number }} a été expédiée",
+  ORDER_FULFILLMENT_UPDATE: "Mise à jour de votre commande {{ order.number }}",
+  ORDER_FULLY_PAID: "Paiement confirmé — commande {{ order.number }}",
+  ORDER_REFUNDED: "Votre remboursement — commande {{ order.number }}",
+  STAFF_ORDER_CONFIRMATION: "Nouvelle commande {{ order.number }}",
+  WITHDRAWAL_REQUESTED_CUSTOMER: "Confirmation de votre demande de rétractation - Commande n°{{ order_number }}",
+  WITHDRAWAL_REQUESTED_STAFF: "[Rétractation] Demande pour commande n°{{ order_number }} ({{ reference }})",
 };

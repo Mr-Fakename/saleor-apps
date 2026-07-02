@@ -19,6 +19,7 @@ import {
   NotifyPayloadCsvExport,
   NotifyPayloadFulfillmentUpdate,
   NotifyPayloadStaffOrderConfirmation,
+  NotifyPayloadWithdrawalRequested,
 } from "../../lib/notify-event-types";
 import { MessageEventTypes } from "./message-event-types";
 
@@ -665,6 +666,30 @@ const csvExportFailedPayload: NotifyPayloadCsvExport = {
   logo_url: "",
 };
 
+const withdrawalRequestedCustomerPayload: NotifyPayloadWithdrawalRequested = {
+  order_number: "231",
+  order_created: "2026-04-15",
+  order_total: "149.90",
+  order_currency: "EUR",
+  recipient_email: "caitlin.johnson@example.com",
+  reference: "RET-231-A3F2",
+  requested_at: "2026-04-24 14:32",
+  reason: "L'article ne correspond pas à mes attentes.",
+  customer_first_name: "Caitlin",
+  customer_last_name: "Johnson",
+  channel_slug: "default-channel",
+  domain: "demo.saleor.cloud",
+  site_name: "Saleor e-commerce",
+  logo_url: "",
+  language_code: "fr",
+};
+
+const withdrawalRequestedStaffPayload: NotifyPayloadWithdrawalRequested = {
+  ...withdrawalRequestedCustomerPayload,
+  recipient_email: "contact@example.com",
+  recipient_list: ["contact@example.com"],
+};
+
 const staffOrderConfirmationPayload: NotifyPayloadStaffOrderConfirmation = {
   order: orderPayloadFragment,
   recipient_email: "staff@example.com",
@@ -696,4 +721,6 @@ export const examplePayloads: Record<MessageEventTypes, any> = {
   ORDER_FULFILLMENT_UPDATE: fulfillmentUpdatePayload,
   ORDER_REFUNDED: orderRefundedPayload,
   STAFF_ORDER_CONFIRMATION: staffOrderConfirmationPayload,
+  WITHDRAWAL_REQUESTED_CUSTOMER: withdrawalRequestedCustomerPayload,
+  WITHDRAWAL_REQUESTED_STAFF: withdrawalRequestedStaffPayload,
 };

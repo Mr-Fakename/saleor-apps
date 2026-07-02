@@ -19,6 +19,8 @@ export const messageEventTypes = [
   "ORDER_FULLY_PAID",
   "ORDER_REFUNDED",
   "STAFF_ORDER_CONFIRMATION",
+  "WITHDRAWAL_REQUESTED_CUSTOMER",
+  "WITHDRAWAL_REQUESTED_STAFF",
 ] as const;
 
 export type MessageEventTypes = (typeof messageEventTypes)[number];
@@ -44,4 +46,6 @@ export const messageEventTypesLabels: Record<MessageEventTypes, string> = {
   ORDER_FULLY_PAID: "Order fully paid",
   ORDER_REFUNDED: "Order refunded",
   STAFF_ORDER_CONFIRMATION: "Staff order confirmation",
+  WITHDRAWAL_REQUESTED_CUSTOMER: "Customer withdrawal request confirmation",
+  WITHDRAWAL_REQUESTED_STAFF: "Staff notification of withdrawal request",
 };

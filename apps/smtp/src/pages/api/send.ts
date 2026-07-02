@@ -3,6 +3,7 @@ import {
   SALEOR_API_URL_HEADER,
   SALEOR_AUTHORIZATION_BEARER_HEADER,
 } from "@saleor/app-sdk/headers";
+import { convert } from "html-to-text";
 import { NextApiHandler } from "next";
 import nodemailer from "nodemailer";
 
@@ -138,6 +139,11 @@ const handler: NextApiHandler = async (req, res) => {
       host: smtpHost,
       port: smtpPort,
       secure: smtpSecure,
+      // On the submission port (587, secure=false) force STARTTLS so credentials and
+      // content are never sent in cleartext, and require TLS 1.2+ — Orange/Free reject
+      // older TLS (RFC 8996). When secure=true (465) the connection is already implicit TLS.
+      requireTLS: !smtpSecure,
+      tls: { minVersion: "TLSv1.2" },
       auth: smtpUser
         ? {
             user: smtpUser,
@@ -146,11 +152,23 @@ const handler: NextApiHandler = async (req, res) => {
         : undefined,
     });
 
+    // Always send a proper multipart/alternative message: a text/plain part alongside the
+    // HTML. HTML-only mail is a spam-filter signal (notably at French ISPs via Vade). If the
+    // HTML can't be converted, fall back to HTML-only rather than failing the send.
+    let text: string | undefined;
+
+    try {
+      text = convert(html);
+    } catch {
+      text = undefined;
+    }
+
     const info = await transporter.sendMail({
       from: smtpFrom,
       to,
       subject,
       html,
+      text,
     });
 
     logger.info("Email sent via bridge endpoint", {
