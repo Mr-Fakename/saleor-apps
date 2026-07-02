@@ -191,15 +191,43 @@ export class TransactionInitializeSessionUseCase {
         pspReference: args.stripePaymentIntentId,
       });
 
-      if (result.error || result.data?.transactionUpdate?.errors?.length) {
-        const errors = result.data?.transactionUpdate?.errors || [];
+      const mutationErrors = result.data?.transactionUpdate?.errors ?? [];
+
+      /*
+       * Resuming an existing checkout creates a NEW Saleor transaction while the
+       * Stripe PaymentIntent (and therefore the pspReference) is reused from the
+       * previous session. Saleor's `transactionUpdate` rejects a pspReference that
+       * already exists on another transaction with a UNIQUE error. This is NOT fatal:
+       * Saleor also sets the pspReference natively from the webhook response (see
+       * use-case-response.ts), so the reference is already linked. Returning an error
+       * here produced a 500 that prevented the storefront from receiving the client
+       * secret and initializing the Stripe payment gateway.
+       */
+      const onlyUniqueErrors =
+        mutationErrors.length > 0 && mutationErrors.every((e) => e.code === "UNIQUE");
+
+      if (onlyUniqueErrors) {
+        this.logger.info(
+          "pspReference already exists on an existing transaction (reused PaymentIntent) - treating as success",
+          {
+            transactionId: args.transactionId,
+            pspReference: args.stripePaymentIntentId,
+          },
+        );
+
+        return ok(undefined);
+      }
+
+      if (result.error || mutationErrors.length) {
         const errorMessage =
-          errors.map((e) => e.message).join(", ") || result.error?.message || "Unknown error";
+          mutationErrors.map((e) => e.message).join(", ") ||
+          result.error?.message ||
+          "Unknown error";
 
         this.logger.error("Failed to update transaction with pspReference", {
           transactionId: args.transactionId,
           pspReference: args.stripePaymentIntentId,
-          errors,
+          errors: mutationErrors,
           graphqlError: result.error,
         });
 
