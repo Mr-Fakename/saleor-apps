@@ -26,10 +26,19 @@ SELECT
   o.status                                        AS "Statut",
 
   CASE
+    WHEN pay.is_paypal THEN 'PayPal'
+    WHEN ti.psp_reference ILIKE 'paypal%' THEN 'PayPal'
     WHEN ti.payment_method_type = 'card'
       THEN 'Carte ' || COALESCE(INITCAP(ti.payment_method_name), '')
     WHEN ti.payment_method_name IS NOT NULL
       THEN INITCAP(ti.payment_method_name)
+    WHEN ti.psp_reference ILIKE 'cb%' OR ti.psp_reference ILIKE 'carte%' THEN 'CB'
+    WHEN ti.psp_reference ILIKE 'vir%' THEN 'Virement'
+    WHEN ti.psp_reference LIKE 'pi_%' THEN 'CB (Stripe)'
+    -- Dashboard "mark as paid": staff types a free-text reference
+    WHEN ti.name = 'Mark-as-paid transaction'
+      THEN 'Manuel (' || COALESCE(ti.psp_reference, '') || ')'
+    WHEN ti.psp_reference IS NOT NULL THEN INITCAP(ti.psp_reference)
     ELSE ''
   END                                             AS "Mode de paiement",
   COALESCE(ti.psp_reference, '')                  AS "Reference PSP",
@@ -88,6 +97,8 @@ SELECT
   COALESCE(o.shipping_method_name, '')            AS "Methode de livraison",
 
   COALESCE(refunds.total_refund, 0)               AS "Montant rembourse",
+
+  COALESCE(pay.fee_total, 0)                      AS "Frais de paiement",
 
   o.currency                                      AS "Devise",
 
@@ -158,7 +169,7 @@ LEFT JOIN account_address ba ON ba.id = o.billing_address_id
 LEFT JOIN account_address sa ON sa.id = o.shipping_address_id
 LEFT JOIN account_user u ON u.id = o.user_id
 LEFT JOIN LATERAL (
-  SELECT payment_method_type, payment_method_name, psp_reference
+  SELECT payment_method_type, payment_method_name, psp_reference, name
   FROM payment_transactionitem pti
   WHERE pti.order_id = o.id
   ORDER BY pti.created_at DESC LIMIT 1
@@ -174,8 +185,20 @@ LEFT JOIN LATERAL (
   FROM order_ordergrantedrefund r
   WHERE r.order_id = o.id AND r.status <> 'failure'
 ) refunds ON true
+-- Payment-fee pseudo-product lines (PayPal fee added by the checkout-prices app,
+-- metadata payment_fee_type = 'paypal_2.9_percent'): summed per order into the
+-- "Frais de paiement" column and excluded from product rows below.
+LEFT JOIN LATERAL (
+  SELECT
+    SUM(fl.total_price_gross_amount)                          AS fee_total,
+    bool_or(fl.metadata->>'payment_fee_type' LIKE 'paypal%')  AS is_paypal
+  FROM order_orderline fl
+  WHERE fl.order_id = o.id
+    AND fl.metadata->>'payment_fee_type' IS NOT NULL
+) pay ON true
 WHERE o.status NOT IN ('draft', 'unconfirmed')
   AND o.created_at >= NOW() - ($1::int * INTERVAL '1 day')
+  AND ol.metadata->>'payment_fee_type' IS NULL
 ORDER BY o.created_at, o.number, ol.created_at
 `;
 
