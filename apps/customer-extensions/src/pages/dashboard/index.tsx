@@ -632,9 +632,15 @@ const ReviewModerationPanel = ({ t }: { t: TranslationKeys }) => {
 };
 
 // Order Unlock Panel Component
+const PAGE_SIZES = [20, 50, 100];
+
 const OrderUnlockPanel = ({ t }: { t: TranslationKeys }) => {
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [pageSize, setPageSize] = useState(PAGE_SIZES[0]);
+  // Cursor stack: one entry per page walked forward, so "Previous" can pop back.
+  // Saleor's connection is cursor-based, so there is no random page access.
+  const [cursorStack, setCursorStack] = useState<Array<string | null>>([null]);
 
   // Debounce search input
   useEffect(() => {
@@ -644,9 +650,17 @@ const OrderUnlockPanel = ({ t }: { t: TranslationKeys }) => {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  // Fetch recent orders
+  // Any change of query or page size invalidates the walked cursors.
+  useEffect(() => {
+    setCursorStack([null]);
+  }, [debouncedSearch, pageSize]);
+
+  const currentCursor = cursorStack[cursorStack.length - 1];
+
+  // Fetch orders for the current page
   const ordersQuery = trpcClient.reviews.getRecentOrders.useQuery({
-    first: 20,
+    first: pageSize,
+    after: currentCursor ?? undefined,
     search: debouncedSearch || undefined,
   });
 
@@ -668,6 +682,24 @@ const OrderUnlockPanel = ({ t }: { t: TranslationKeys }) => {
       unlockedOrdersQuery.refetch();
     },
   });
+
+  // Saleor returns the raw OrderStatus enum (FULFILLED, UNFULFILLED, ...).
+  // Map it to a translated label; fall back to the raw value so an enum added
+  // upstream shows up as itself rather than blank.
+  const orderStatusLabel = (status: string): string => {
+    const labels: Record<string, string> = {
+      UNFULFILLED: t.orders.statusUnfulfilled,
+      PARTIALLY_FULFILLED: t.orders.statusPartiallyFulfilled,
+      FULFILLED: t.orders.statusFulfilled,
+      CANCELED: t.orders.statusCanceled,
+      UNCONFIRMED: t.orders.statusUnconfirmed,
+      DRAFT: t.orders.statusDraft,
+      RETURNED: t.orders.statusReturned,
+      PARTIALLY_RETURNED: t.orders.statusPartiallyReturned,
+      EXPIRED: t.orders.statusExpired,
+    };
+    return labels[status] ?? status;
+  };
 
   const unlockedOrderIds = new Set(
     unlockedOrdersQuery.data?.unlockedOrders.map((u) => u.orderId) || []
@@ -747,9 +779,45 @@ const OrderUnlockPanel = ({ t }: { t: TranslationKeys }) => {
 
       {/* Recent/Search Results Orders Table */}
       <Box marginBottom={6}>
-        <h3 style={{ fontSize: "16px", fontWeight: 600, marginBottom: "12px" }}>
-          {debouncedSearch ? t.orders.searchResults : t.orders.recentOrders}
-        </h3>
+        <Box
+          display="flex"
+          alignItems="center"
+          justifyContent="space-between"
+          marginBottom={3}
+          style={{ gap: "12px", flexWrap: "wrap" }}
+        >
+          <h3 style={{ fontSize: "16px", fontWeight: 600, margin: 0 }}>
+            {debouncedSearch ? t.orders.searchResults : t.orders.recentOrders}
+          </h3>
+          <Box display="flex" alignItems="center" style={{ gap: "8px" }}>
+            <span style={{ fontSize: "13px", color: "#666" }}>
+              {t.orders.showing
+                .replace("{shown}", String(ordersQuery.data?.orders.length ?? 0))
+                .replace("{total}", String(ordersQuery.data?.totalCount ?? "?"))}
+            </span>
+            <label style={{ fontSize: "13px", color: "#666" }} htmlFor="orders-per-page">
+              {t.orders.perPage}
+            </label>
+            <select
+              id="orders-per-page"
+              value={pageSize}
+              onChange={(e) => setPageSize(Number(e.target.value))}
+              style={{
+                padding: "4px 8px",
+                fontSize: "13px",
+                border: "1px solid #e0e0e0",
+                borderRadius: "4px",
+                backgroundColor: "white",
+              }}
+            >
+              {PAGE_SIZES.map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+          </Box>
+        </Box>
         <Box
           style={{
             border: "1px solid #e0e0e0",
@@ -821,7 +889,7 @@ const OrderUnlockPanel = ({ t }: { t: TranslationKeys }) => {
                           {order.customerEmail || "-"}
                         </div>
                       </td>
-                      <td style={{ padding: "12px 16px" }}>{order.status}</td>
+                      <td style={{ padding: "12px 16px" }}>{orderStatusLabel(order.status)}</td>
                       <td style={{ padding: "12px 16px", textAlign: "center" }}>
                         {getUnlockStatusBadge(isUnlocked)}
                       </td>
@@ -876,6 +944,50 @@ const OrderUnlockPanel = ({ t }: { t: TranslationKeys }) => {
               )}
             </tbody>
           </table>
+        </Box>
+
+        {/* Cursor pagination — Saleor's connection has no random page access,
+            so we walk forward with `after` and pop back off the cursor stack. */}
+        <Box
+          display="flex"
+          alignItems="center"
+          justifyContent="flex-end"
+          marginTop={3}
+          style={{ gap: "8px" }}
+        >
+          <button
+            onClick={() => setCursorStack((prev) => (prev.length > 1 ? prev.slice(0, -1) : prev))}
+            disabled={cursorStack.length <= 1 || ordersQuery.isLoading}
+            style={{
+              padding: "6px 12px",
+              border: "1px solid #e0e0e0",
+              borderRadius: "4px",
+              backgroundColor: "white",
+              fontSize: "13px",
+              cursor: cursorStack.length <= 1 ? "not-allowed" : "pointer",
+              opacity: cursorStack.length <= 1 ? 0.5 : 1,
+            }}
+          >
+            {t.orders.previousPage}
+          </button>
+          <button
+            onClick={() => {
+              const next = ordersQuery.data?.pageInfo.endCursor;
+              if (next) setCursorStack((prev) => [...prev, next]);
+            }}
+            disabled={!ordersQuery.data?.pageInfo.hasNextPage || ordersQuery.isLoading}
+            style={{
+              padding: "6px 12px",
+              border: "1px solid #e0e0e0",
+              borderRadius: "4px",
+              backgroundColor: "white",
+              fontSize: "13px",
+              cursor: !ordersQuery.data?.pageInfo.hasNextPage ? "not-allowed" : "pointer",
+              opacity: !ordersQuery.data?.pageInfo.hasNextPage ? 0.5 : 1,
+            }}
+          >
+            {t.orders.nextPage}
+          </button>
         </Box>
       </Box>
 

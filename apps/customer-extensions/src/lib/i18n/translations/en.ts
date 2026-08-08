@@ -55,6 +55,21 @@ export interface TranslationKeys {
     lock: string;
     failedToUnlock: string;
     failedToLock: string;
+    // Order status (raw Saleor OrderStatus enum -> human label)
+    statusUnfulfilled: string;
+    statusPartiallyFulfilled: string;
+    statusFulfilled: string;
+    statusCanceled: string;
+    statusUnconfirmed: string;
+    statusDraft: string;
+    statusReturned: string;
+    statusPartiallyReturned: string;
+    statusExpired: string;
+    // Pagination
+    perPage: string;
+    showing: string;
+    previousPage: string;
+    nextPage: string;
   };
   common: {
     loading: string;
@@ -137,6 +152,21 @@ export const en: TranslationKeys = {
     // Errors
     failedToUnlock: "Failed to unlock order. Please try again.",
     failedToLock: "Failed to lock order. Please try again.",
+    // Order status (raw Saleor OrderStatus enum -> human label)
+    statusUnfulfilled: "Unfulfilled",
+    statusPartiallyFulfilled: "Partially fulfilled",
+    statusFulfilled: "Fulfilled",
+    statusCanceled: "Cancelled",
+    statusUnconfirmed: "Unconfirmed",
+    statusDraft: "Draft",
+    statusReturned: "Returned",
+    statusPartiallyReturned: "Partially returned",
+    statusExpired: "Expired",
+    // Pagination
+    perPage: "Per page",
+    showing: "Showing {shown} of {total}",
+    previousPage: "Previous",
+    nextPage: "Next",
   },
 
   // Common

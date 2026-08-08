@@ -1,5 +1,17 @@
-query GetRecentOrders($first: Int!, $channel: String) {
-  orders(first: $first, channel: $channel, sortBy: { field: CREATED_AT, direction: DESC }) {
+query GetRecentOrders($first: Int!, $after: String, $channel: String) {
+  orders(
+    first: $first
+    after: $after
+    channel: $channel
+    sortBy: { field: CREATED_AT, direction: DESC }
+  ) {
+    totalCount
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
     edges {
       node {
         id

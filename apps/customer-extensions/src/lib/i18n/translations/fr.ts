@@ -75,6 +75,21 @@ export const fr: TranslationKeys = {
     // Errors
     failedToUnlock: "Échec du déblocage de la commande. Veuillez réessayer.",
     failedToLock: "Échec du verrouillage de la commande. Veuillez réessayer.",
+    // Order status (raw Saleor OrderStatus enum -> human label)
+    statusUnfulfilled: "Non traitée",
+    statusPartiallyFulfilled: "Partiellement traitée",
+    statusFulfilled: "Traitée",
+    statusCanceled: "Annulée",
+    statusUnconfirmed: "Non confirmée",
+    statusDraft: "Brouillon",
+    statusReturned: "Retournée",
+    statusPartiallyReturned: "Partiellement retournée",
+    statusExpired: "Expirée",
+    // Pagination
+    perPage: "Par page",
+    showing: "{shown} sur {total}",
+    previousPage: "Précédent",
+    nextPage: "Suivant",
   },
 
   // Common

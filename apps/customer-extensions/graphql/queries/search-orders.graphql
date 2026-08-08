@@ -1,5 +1,17 @@
-query SearchOrders($filter: OrderFilterInput, $first: Int!) {
-  orders(filter: $filter, first: $first, sortBy: { field: CREATED_AT, direction: DESC }) {
+query SearchOrders($filter: OrderFilterInput, $first: Int!, $after: String) {
+  orders(
+    filter: $filter
+    first: $first
+    after: $after
+    sortBy: { field: CREATED_AT, direction: DESC }
+  ) {
+    totalCount
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
     edges {
       node {
         id

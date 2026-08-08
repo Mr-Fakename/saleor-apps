@@ -134,12 +134,14 @@ export class SaleorClient {
 
   async getRecentOrders(args: {
     first: number;
+    after?: string;
     channel?: string;
   }): Promise<Result<GetRecentOrdersQuery["orders"], InstanceType<typeof UnknownError>>> {
     try {
       const result = await this.client
         .query(GetRecentOrdersDocument, {
           first: args.first,
+          after: args.after,
           channel: args.channel,
         })
         .toPromise();
@@ -161,6 +163,7 @@ export class SaleorClient {
   async searchOrders(args: {
     query: string;
     first: number;
+    after?: string;
   }): Promise<Result<SearchOrdersQuery["orders"], InstanceType<typeof UnknownError>>> {
     try {
       const result = await this.client
@@ -169,6 +172,7 @@ export class SaleorClient {
             search: args.query,
           },
           first: args.first,
+          after: args.after,
         })
         .toPromise();
 
