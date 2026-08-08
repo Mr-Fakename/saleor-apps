@@ -23,7 +23,21 @@ const ORDER_EXPORT_SQL = `
 SELECT
   o.number                                        AS "N commande",
   TO_CHAR(o.created_at, 'YYYY-MM-DD HH24:MI:SS') AS "Date de commande",
-  o.status                                        AS "Statut",
+  -- Saleor stores the status as a lowercase enum ('fulfilled', 'unfulfilled', ...).
+  -- Translate it here so the CSV the client opens is French end to end; unknown
+  -- values fall through unchanged rather than becoming blank.
+  CASE o.status
+    WHEN 'unfulfilled'         THEN 'Non traitee'
+    WHEN 'partially fulfilled' THEN 'Partiellement traitee'
+    WHEN 'fulfilled'           THEN 'Traitee'
+    WHEN 'canceled'            THEN 'Annulee'
+    WHEN 'unconfirmed'         THEN 'Non confirmee'
+    WHEN 'draft'               THEN 'Brouillon'
+    WHEN 'returned'            THEN 'Retournee'
+    WHEN 'partially returned'  THEN 'Partiellement retournee'
+    WHEN 'expired'             THEN 'Expiree'
+    ELSE o.status
+  END                                             AS "Statut",
 
   CASE
     WHEN pay.is_paypal THEN 'PayPal'
