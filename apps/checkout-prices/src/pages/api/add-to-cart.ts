@@ -188,18 +188,33 @@ export default async function handler(
     .toPromise();
 
   if (addLinesMutation.error) {
-    console.error(checkoutQuery.error);
+    console.error("checkoutLinesAdd transport error", addLinesMutation.error);
     return res.status(400).json({
-      errorMessage: `Could not get checkout details. Error: ${addLinesMutation.error.message}`,
+      errorMessage: `Could not add to cart. Error: ${addLinesMutation.error.message}`,
     });
   }
 
   const updatedCheckout = addLinesMutation.data?.checkoutLinesAdd?.checkout;
 
   if (!updatedCheckout) {
-    console.error("Adding lines to checkout has failed");
+    // Saleor returns the reason in checkoutLinesAdd.errors (INSUFFICIENT_STOCK,
+    // QUANTITY_GREATER_THAN_LIMIT, UNAVAILABLE_VARIANT_IN_CHANNEL, ...). Discarding
+    // it left customers with an unactionable message and us unable to diagnose a
+    // live checkout failure at all — see the 2026-08-13 incident.
+    const errors = addLinesMutation.data?.checkoutLinesAdd?.errors ?? [];
+
+    console.error("Adding lines to checkout has failed", {
+      checkoutId,
+      variantId,
+      quantity,
+      errors,
+    });
+
     return res.status(400).json({
-      errorMessage: "Adding lines to checkout has failed",
+      errorMessage: errors.length
+        ? errors.map((e) => `${e.code}: ${e.message ?? "no message"}`).join("; ")
+        : "Adding lines to checkout has failed",
+      errors,
     });
   }
 

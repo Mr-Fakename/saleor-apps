@@ -386,9 +386,16 @@ export default async function handler(
   const updatedCheckout = addLinesMutation.data?.checkoutLinesAdd?.checkout;
 
   if (!updatedCheckout) {
-    console.error("Adding lines to checkout has failed");
+    // See add-to-cart.ts — Saleor puts the reason in checkoutLinesAdd.errors.
+    const errors = addLinesMutation.data?.checkoutLinesAdd?.errors ?? [];
+
+    console.error("Adding lines to checkout has failed", { checkoutId, errors });
+
     return res.status(400).json({
-      errorMessage: "Adding lines to checkout has failed",
+      errorMessage: errors.length
+        ? errors.map((e) => `${e.code}: ${e.message ?? "no message"}`).join("; ")
+        : "Adding lines to checkout has failed",
+      errors,
     });
   }
 
