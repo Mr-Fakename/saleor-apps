@@ -13,6 +13,7 @@ import {
 import { createStripeRefundId } from "@/modules/stripe/stripe-refund-id";
 import { createStripeRefundStatus } from "@/modules/stripe/stripe-refund-status";
 import { createTimestampFromStripeEvent } from "@/modules/stripe/stripe-timestamps";
+import { AllowedStripeObjectMetadata } from "@/modules/stripe/types";
 import { mapRefundStatusToTransactionResult } from "@/modules/transaction-result/map-refund-status-to-transaction-result";
 import {
   TransactionRecorderError,
@@ -21,7 +22,18 @@ import {
 
 import { TransactionEventReportVariablesResolver } from "../transaction-event-report-variables-resolver";
 
-export type StripeChargeHandlerSupportedEvents = Stripe.ChargeRefundUpdatedEvent;
+export type StripeChargeHandlerSupportedEvents =
+  | Stripe.ChargeRefundUpdatedEvent
+  | Stripe.RefundCreatedEvent
+  | Stripe.RefundUpdatedEvent
+  | Stripe.RefundFailedEvent;
+
+const SUPPORTED_EVENT_TYPES: StripeChargeHandlerSupportedEvents["type"][] = [
+  "charge.refund.updated",
+  "refund.created",
+  "refund.updated",
+  "refund.failed",
+];
 
 type PossibleErrors =
   | InstanceType<
@@ -45,12 +57,12 @@ export class StripeRefundHandler {
   });
 
   private prepareTransactionEventReportParams(event: StripeChargeHandlerSupportedEvents) {
-    const chargeObject = event.data.object;
-    const currency = chargeObject.currency;
+    const refundObject = event.data.object;
+    const currency = refundObject.currency;
     const timestamp = createTimestampFromStripeEvent(event);
 
     const saleorMoneyResult = SaleorMoney.createFromStripe({
-      amount: chargeObject.amount,
+      amount: refundObject.amount,
       currency,
     });
 
@@ -110,7 +122,17 @@ export class StripeRefundHandler {
   private checkIfEventIsSupported(
     event: Stripe.Event,
   ): event is StripeChargeHandlerSupportedEvents {
-    return event.type === "charge.refund.updated";
+    return (SUPPORTED_EVENT_TYPES as string[]).includes(event.type);
+  }
+
+  /**
+   * A refund the app itself created carries Saleor metadata; anything else was created
+   * outside of Saleor (Stripe Dashboard, Stripe API, dispute handling).
+   */
+  static isCreatedBySaleor(refund: Stripe.Refund): boolean {
+    const metadata = refund.metadata as AllowedStripeObjectMetadata | null;
+
+    return Boolean(metadata?.saleor_transaction_id);
   }
 
   async processRefundEvent({
@@ -130,7 +152,9 @@ export class StripeRefundHandler {
       return err(new StripeRefundHandler.NotSupportedEventError("Unsupported event type"));
     }
 
-    const stripePaymentIntentIdResult = this.resolvePaymentIntentId(event.data.object);
+    const refund = event.data.object;
+
+    const stripePaymentIntentIdResult = this.resolvePaymentIntentId(refund);
 
     if (stripePaymentIntentIdResult.isErr()) {
       return err(stripePaymentIntentIdResult.error);
@@ -155,27 +179,43 @@ export class StripeRefundHandler {
 
     const { saleorMoney, timestamp } = paramsResult.value;
 
-    const refundId = createStripeRefundId(event.data.object.id);
+    const refundId = createStripeRefundId(refund.id);
 
-    switch (event.type) {
-      case "charge.refund.updated": {
-        /*
-         * FIXED: Use Payment Intent ID as pspReference for consistency, not refund ID
-         * This ensures all transaction events for the same transaction use the same pspReference
-         */
-        return ok(
-          new TransactionEventReportVariablesResolver({
-            transactionResult: mapRefundStatusToTransactionResult(
-              createStripeRefundStatus(event.data.object.status),
-            ),
-            stripeObjectId: stripePaymentIntentIdResult.value,
-            saleorTransactionId: recordedTransactionResult.value.saleorTransactionId,
-            saleorMoney,
-            timestamp,
-            externalUrl: generateRefundStripeDashboardUrl(refundId, stripeEnv),
-          }),
-        );
-      }
+    /*
+     * Refunds started from Saleor report under the Payment Intent ID: Saleor matched the
+     * REFUND_REQUEST event it created with that pspReference, and a mismatch would leave
+     * that request pending forever.
+     *
+     * Refunds created outside of Saleor have no request event to match, so they report
+     * under the refund ID - which also keeps several external refunds of the same intent
+     * distinct (Saleor deduplicates events by pspReference + type).
+     */
+    const pspReference = StripeRefundHandler.isCreatedBySaleor(refund)
+      ? stripePaymentIntentIdResult.value
+      : refundId;
+
+    // Stripe types the status as nullable and can add values; don't let that become a 500 + retry loop.
+    let refundStatus;
+
+    try {
+      refundStatus = createStripeRefundStatus(refund.status);
+    } catch {
+      return err(
+        new StripeRefundHandler.MalformedEventError(
+          `Refund event carries an unsupported status: ${refund.status}`,
+        ),
+      );
     }
+
+    return ok(
+      new TransactionEventReportVariablesResolver({
+        transactionResult: mapRefundStatusToTransactionResult(refundStatus),
+        stripeObjectId: pspReference,
+        saleorTransactionId: recordedTransactionResult.value.saleorTransactionId,
+        saleorMoney,
+        timestamp,
+        externalUrl: generateRefundStripeDashboardUrl(refundId, stripeEnv),
+      }),
+    );
   }
 }

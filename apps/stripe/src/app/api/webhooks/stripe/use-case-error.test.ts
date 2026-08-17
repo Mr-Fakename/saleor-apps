@@ -208,7 +208,8 @@ describe("StripeWebhookUseCase - Error cases", () => {
 
   it("Returns error if event is not supported by StripeRefundHandler", async () => {
     const event = {
-      type: "refund.created",
+      // Refund-object event types the handler knows are listed in supported-stripe-events.ts
+      type: "charge.refunded",
       data: {
         object: {
           object: "refund",
@@ -221,7 +222,7 @@ describe("StripeWebhookUseCase - Error cases", () => {
           },
         },
       },
-    } as unknown as Stripe.RefundCreatedEvent;
+    } as unknown as Stripe.Event;
 
     const stripePiId = mockedStripePaymentIntentId;
 

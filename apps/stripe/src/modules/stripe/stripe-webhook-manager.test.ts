@@ -166,6 +166,9 @@ describe("StripeWebhookManager", () => {
             "payment_intent.succeeded",
             "payment_intent.canceled",
             "charge.refund.updated",
+            "refund.created",
+            "refund.updated",
+            "refund.failed",
           ],
           "metadata": {
             "saleorAppConfigurationId": "81f323bd-91e2-4838-ab6e-5affd81ffc3b",

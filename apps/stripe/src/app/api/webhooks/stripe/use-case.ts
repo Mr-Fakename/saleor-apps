@@ -136,19 +136,18 @@ export class StripeWebhookUseCase {
       case "refund": {
         loggerContext.set("stripeRefundId", event.data.object.id);
 
-        const meta = event.data.object.metadata as AllowedStripeObjectMetadata;
-
-        if (!meta?.saleor_transaction_id) {
-          return err(
-            new ObjectMetadataMissingError(
-              "Missing metadata on object, it was not created by Saleor",
-              {
-                props: {
-                  meta,
-                },
-              },
-            ),
-          );
+        /*
+         * Unlike payment intents, refunds are processed even without Saleor metadata: a refund
+         * issued straight from the Stripe Dashboard has none, yet it moves real money out of a
+         * payment intent the app knows about, so Saleor must hear about it. The transaction is
+         * resolved from the payment intent id; if that intent was not recorded by this app, the
+         * handler fails with TransactionMissingError and the event is rejected as not ours.
+         */
+        if (!StripeRefundHandler.isCreatedBySaleor(event.data.object)) {
+          this.logger.info("Processing refund created outside of Saleor", {
+            stripeRefundId: event.data.object.id,
+            eventType: event.type,
+          });
         }
 
         const handler = new StripeRefundHandler();

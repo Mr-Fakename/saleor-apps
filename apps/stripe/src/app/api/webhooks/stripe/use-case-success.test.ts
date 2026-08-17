@@ -14,6 +14,7 @@ import { getMockedPaymentIntentPaymentFailedEvent } from "@/__tests__/mocks/stri
 import { getMockedPaymentIntentProcessingEvent } from "@/__tests__/mocks/stripe-events/mocked-payment-intent-processing";
 import { getMockedPaymentIntentRequiresActionEvent } from "@/__tests__/mocks/stripe-events/mocked-payment-intent-requires-action";
 import { getMockedPaymentIntentSucceededEvent } from "@/__tests__/mocks/stripe-events/mocked-payment-intent-succeeded";
+import { getMockedRefundCreatedEvent } from "@/__tests__/mocks/stripe-events/mocked-refund-created";
 import { createResolvedTransactionFlow } from "@/modules/resolved-transaction-flow";
 import { createSaleorTransactionFlow } from "@/modules/saleor/saleor-transaction-flow";
 import {
@@ -1140,10 +1141,55 @@ describe("StripeWebhookUseCase - handling events without metadata created by Sal
     expect(mockEventReporter.reportTransactionEvent).not.toHaveBeenCalled();
   });
 
-  it("Returns 400 to Stripe if metadata is missing for charge.refund.updated event", async () => {
-    const event = getMockedChargeRefundUpdatedEvent();
+  /*
+   * Refunds are the exception: one issued from the Stripe Dashboard has no Saleor metadata,
+   * but it moved real money out of an intent the app recorded, so Saleor has to hear about it.
+   */
+  it("Reports a refund created outside of Saleor, under the refund ID", async () => {
+    const event = getMockedRefundCreatedEvent();
 
-    event.data.object.metadata = {};
+    eventVerify.verifyEvent.mockImplementationOnce(() => ok(event));
+
+    mockTransactionRecorder.transactions = {
+      [mockedStripePaymentIntentId]: new RecordedTransaction({
+        saleorTransactionId: mockedSaleorTransactionId,
+        stripePaymentIntentId: mockedStripePaymentIntentId,
+        saleorTransactionFlow: createSaleorTransactionFlow("CHARGE"),
+        resolvedTransactionFlow: createResolvedTransactionFlow("CHARGE"),
+        selectedPaymentMethod: "card",
+      }),
+    };
+
+    mockEventReporter.reportTransactionEvent.mockImplementationOnce(async () => {
+      const data: TransactionEventReportResultResult = {
+        createdEventId: "TEST_EVENT_ID",
+      };
+
+      return ok(data);
+    });
+
+    const result = await instance.execute({
+      rawBody: "TEST BODY",
+      signatureHeader: "SIGNATURE",
+      webhookParams: webhookParams,
+    });
+
+    expect(result._unsafeUnwrap()).toMatchInlineSnapshot(`
+      StripeWebhookSuccessResponse {
+        "message": "Ok",
+        "statusCode": 200,
+      }
+    `);
+
+    const reportedEvent = vi.mocked(mockEventReporter.reportTransactionEvent).mock.calls[0][0];
+
+    expect(reportedEvent.type).toBe("REFUND_SUCCESS");
+    expect(reportedEvent.pspReference).toBe(event.data.object.id);
+    expect(reportedEvent.transactionId).toBe(mockedSaleorTransactionId);
+  });
+
+  it("Returns 400 to Stripe for a refund on a payment intent this app never recorded", async () => {
+    const event = getMockedRefundCreatedEvent();
 
     eventVerify.verifyEvent.mockImplementationOnce(() => ok(event));
 
@@ -1154,8 +1200,8 @@ describe("StripeWebhookUseCase - handling events without metadata created by Sal
     });
 
     expect(result._unsafeUnwrapErr()).toMatchInlineSnapshot(`
-      ObjectCreatedOutsideOfSaleorResponse {
-        "message": "Object created outside of Saleor is not processable",
+      StripeWebhookTransactionMissingResponse {
+        "message": "Transaction is missing",
         "statusCode": 400,
       }
     `);

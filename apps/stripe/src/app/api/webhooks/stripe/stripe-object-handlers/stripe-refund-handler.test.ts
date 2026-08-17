@@ -6,7 +6,9 @@ import { mockedStripePaymentIntentId } from "@/__tests__/mocks/mocked-stripe-pay
 import { MockedTransactionRecorder } from "@/__tests__/mocks/mocked-transaction-recorder";
 import { mockedSaleorApiUrl } from "@/__tests__/mocks/saleor-api-url";
 import { getMockedChargeRefundUpdatedEvent } from "@/__tests__/mocks/stripe-events/mocked-charge-refund-updated";
+import { getMockedRefundCreatedEvent } from "@/__tests__/mocks/stripe-events/mocked-refund-created";
 import { createResolvedTransactionFlow } from "@/modules/resolved-transaction-flow";
+import { TransactionRecorderError } from "@/modules/transactions-recording/repositories/transaction-recorder-repo";
 
 import { StripeRefundHandler } from "./stripe-refund-handler";
 
@@ -15,7 +17,7 @@ describe("StripeRefundHandler", () => {
     it("should return NotSupportedEventError for unsupported event", async () => {
       const mockTransactionRecorder = new MockedTransactionRecorder();
       const event = {
-        type: "refund.created",
+        type: "charge.refunded",
       } as unknown as Stripe.Event;
 
       const handler = new StripeRefundHandler();
@@ -144,6 +146,106 @@ describe("StripeRefundHandler", () => {
          * (intentionally the Payment Intent ID, not the refund ID - see stripe-refund-handler.ts).
          */
         expect(pspReference).toStrictEqual(mockedStripePaymentIntentId);
+      });
+    });
+
+    describe("refunds created outside of Saleor", () => {
+      const setup = () => {
+        const mockTransactionRecorder = new MockedTransactionRecorder();
+
+        mockTransactionRecorder.transactions = {
+          [mockedStripePaymentIntentId]: getMockedRecordedTransaction(),
+        };
+
+        return { mockTransactionRecorder, handler: new StripeRefundHandler() };
+      };
+
+      it("should report a Stripe Dashboard refund under the refund ID, so several external refunds of one intent stay distinct", async () => {
+        const { mockTransactionRecorder, handler } = setup();
+        const event = getMockedRefundCreatedEvent();
+
+        const result = await handler.processRefundEvent({
+          event,
+          transactionRecorder: mockTransactionRecorder,
+          appId: "appId",
+          saleorApiUrl: mockedSaleorApiUrl,
+          stripeEnv: "LIVE",
+        });
+
+        const { type, pspReference, amount } = result
+          ._unsafeUnwrap()
+          .resolveEventReportVariables();
+
+        expect(type).toBe("REFUND_SUCCESS");
+        expect(pspReference).toStrictEqual(event.data.object.id);
+        expect(amount.amount).toStrictEqual(10);
+      });
+
+      it("should keep the Payment Intent ID when the refund carries Saleor metadata", async () => {
+        const { mockTransactionRecorder, handler } = setup();
+        const event = getMockedRefundCreatedEvent({ createdBySaleor: true });
+
+        const result = await handler.processRefundEvent({
+          event,
+          transactionRecorder: mockTransactionRecorder,
+          appId: "appId",
+          saleorApiUrl: mockedSaleorApiUrl,
+          stripeEnv: "LIVE",
+        });
+
+        const { pspReference } = result._unsafeUnwrap().resolveEventReportVariables();
+
+        expect(pspReference).toStrictEqual(mockedStripePaymentIntentId);
+      });
+
+      it("should report REFUND_FAILURE for a failed external refund", async () => {
+        const { mockTransactionRecorder, handler } = setup();
+        const event = getMockedRefundCreatedEvent({ status: "failed" });
+
+        const result = await handler.processRefundEvent({
+          event,
+          transactionRecorder: mockTransactionRecorder,
+          appId: "appId",
+          saleorApiUrl: mockedSaleorApiUrl,
+          stripeEnv: "LIVE",
+        });
+
+        expect(result._unsafeUnwrap().resolveEventReportVariables().type).toBe("REFUND_FAILURE");
+      });
+
+      it("should return MalformedEventError instead of throwing when the status is unknown", async () => {
+        const { mockTransactionRecorder, handler } = setup();
+        const event = getMockedRefundCreatedEvent();
+
+        // Stripe types the status as nullable and may add new values
+        event.data.object.status = null;
+
+        const result = await handler.processRefundEvent({
+          event,
+          transactionRecorder: mockTransactionRecorder,
+          appId: "appId",
+          saleorApiUrl: mockedSaleorApiUrl,
+          stripeEnv: "LIVE",
+        });
+
+        expect(result._unsafeUnwrapErr()).toBeInstanceOf(StripeRefundHandler.MalformedEventError);
+      });
+
+      it("should fail with TransactionMissingError when the payment intent was not recorded by this app", async () => {
+        const mockTransactionRecorder = new MockedTransactionRecorder();
+        const handler = new StripeRefundHandler();
+
+        const result = await handler.processRefundEvent({
+          event: getMockedRefundCreatedEvent(),
+          transactionRecorder: mockTransactionRecorder,
+          appId: "appId",
+          saleorApiUrl: mockedSaleorApiUrl,
+          stripeEnv: "LIVE",
+        });
+
+        expect(result._unsafeUnwrapErr()).toBeInstanceOf(
+          TransactionRecorderError.TransactionMissingError,
+        );
       });
     });
   });
