@@ -200,7 +200,7 @@ LEFT JOIN LATERAL (
   WHERE r.order_id = o.id AND r.status <> 'failure'
 ) refunds ON true
 -- Payment-fee pseudo-product lines (PayPal fee added by the checkout-prices app,
--- metadata payment_fee_type = 'paypal_2.9_percent'): summed per order into the
+-- metadata payment_fee_type = 'paypal_<rate>_percent'): summed per order into the
 -- "Frais de paiement" column and excluded from product rows below.
 LEFT JOIN LATERAL (
   SELECT

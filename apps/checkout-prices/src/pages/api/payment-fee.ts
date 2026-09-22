@@ -16,7 +16,31 @@ import { apl } from "../../saleor-app";
 // Required env: PAYMENT_FEE_VARIANT_ID
 
 const PAYMENT_FEE_METADATA_KEY = "payment_fee_type";
-const PAYMENT_FEE_METADATA_VALUE = "paypal_2.9_percent";
+
+// Default PayPal service fee rate, as a percentage. The storefront owns the
+// rate -- it computes the fee amount it sends us -- and passes it as
+// `ratePercent`; this default only covers callers that predate that field.
+const DEFAULT_FEE_RATE_PERCENT = 1.5;
+
+// 1.5 -> "1.5", 1.50 -> "1.5", 3 -> "3"
+function formatRate(ratePercent: number): string {
+  return String(Number(ratePercent.toFixed(2)));
+}
+
+// The marker written onto new fee lines. The rate is embedded for
+// auditability, so this value changes whenever the rate does -- which is
+// exactly why every LOOKUP below matches on PAYMENT_FEE_METADATA_KEY ALONE.
+// This app writes no other kind of payment-fee line, so the key is
+// unambiguous on its own, and key-only matching keeps a checkout created
+// before a rate change removable after it (otherwise the stale line would be
+// invisible to the remover and the customer would be charged twice).
+function feeMetadataValue(ratePercent: number): string {
+  return `paypal_${formatRate(ratePercent)}_percent`;
+}
+
+function feeDisplayName(ratePercent: number): string {
+  return `Service fee (${formatRate(ratePercent)}%)`;
+}
 
 type SuccessfulResponse = {
   checkout: CheckoutDetailsFragment;
@@ -47,7 +71,7 @@ function setCorsHeaders(req: NextApiRequest, res: NextApiResponse) {
 
 export default async function handler(
   req: NextApiRequest,
-  res: NextApiResponse<PaymentFeeResponse>
+  res: NextApiResponse<PaymentFeeResponse>,
 ) {
   setCorsHeaders(req, res);
 
@@ -59,11 +83,12 @@ export default async function handler(
     return res.status(405).json({ errorMessage: "Method not allowed" });
   }
 
-  const { checkoutId, apply, amount, currency } = req.body as {
+  const { checkoutId, apply, amount, currency, ratePercent } = req.body as {
     checkoutId?: string;
     apply?: boolean; // true to add/update fee, false to remove
     amount?: number | string; // fee amount to set when apply=true
     currency?: string; // ISO currency for the price
+    ratePercent?: number; // fee rate the caller used, e.g. 1.5 -- label/marker only
   };
 
   if (!checkoutId) {
@@ -72,6 +97,19 @@ export default async function handler(
   if (apply === undefined) {
     return res.status(400).json({ errorMessage: "apply flag has not been provided" });
   }
+  if (
+    ratePercent !== undefined &&
+    (typeof ratePercent !== "number" ||
+      !Number.isFinite(ratePercent) ||
+      ratePercent <= 0 ||
+      ratePercent > 100)
+  ) {
+    return res.status(400).json({ errorMessage: "ratePercent must be a number in (0, 100]" });
+  }
+
+  // Label/marker only. The charged amount is always the caller-supplied
+  // `amount`; this never recomputes it.
+  const effectiveRatePercent = ratePercent ?? DEFAULT_FEE_RATE_PERCENT;
 
   const FEE_VARIANT_ID = process.env.PAYMENT_FEE_VARIANT_ID;
   if (!FEE_VARIANT_ID && apply) {
@@ -110,8 +148,8 @@ export default async function handler(
   }
 
   // Try to locate an existing fee line by metadata
-  const existingFeeLine = checkout.lines.find((line) =>
-    line.metadata?.some((m) => m.key === PAYMENT_FEE_METADATA_KEY && m.value === PAYMENT_FEE_METADATA_VALUE)
+  const existingFeeLine = checkout.lines.find(
+    (line) => line.metadata?.some((m) => m.key === PAYMENT_FEE_METADATA_KEY),
   );
 
   // If apply=false, remove fee line if exists and return
@@ -178,8 +216,8 @@ export default async function handler(
           price: normalizedAmount,
           forceNewLine: true,
           metadata: [
-            { key: PAYMENT_FEE_METADATA_KEY, value: PAYMENT_FEE_METADATA_VALUE },
-            { key: "display_name", value: "Service fee (2.9%)" },
+            { key: PAYMENT_FEE_METADATA_KEY, value: feeMetadataValue(effectiveRatePercent) },
+            { key: "display_name", value: feeDisplayName(effectiveRatePercent) },
             ...(currency ? [{ key: "currency", value: String(currency) }] : []),
           ],
         },
