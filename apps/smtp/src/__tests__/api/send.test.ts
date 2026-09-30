@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { resetIbanGuardAlertBudget } from "../../modules/iban-guard/iban-guard";
 import handler from "../../pages/api/send";
 
 // Mock nodemailer
@@ -364,6 +365,8 @@ describe("POST /api/send", () => {
       secure: false,
       requireTLS: true,
       tls: { minVersion: "TLSv1.2" },
+      disableFileAccess: true,
+      disableUrlAccess: true,
       auth: undefined,
     });
   });
@@ -385,7 +388,93 @@ describe("POST /api/send", () => {
       secure: false,
       requireTLS: true,
       tls: { minVersion: "TLSv1.2" },
+      disableFileAccess: true,
+      disableUrlAccess: true,
       auth: { user: "user", pass: "pass" },
+    });
+  });
+
+  it.each([
+    ["html", { path: "/etc/passwd" }],
+    ["html", { href: "http://169.254.169.254/" }],
+    ["to", ["a@example.com", "b@example.com"]],
+    ["subject", 42],
+  ] as Array<[string, unknown]>)("returns 400 when '%s' is not a string", async (field, value) => {
+    const req = createMockReq({
+      body: {
+        to: "user@example.com",
+        subject: "Test Subject",
+        html: "<h1>Hello</h1>",
+        [field]: value,
+      },
+    });
+    const res = createMockRes();
+
+    await handler(req, res);
+
+    expect(res._status).toBe(400);
+    expect(mockSendMail).not.toHaveBeenCalled();
+  });
+
+  describe("IBAN guard", () => {
+    const shopIbanEmail = "<p>IBAN : FR76 1020 6000 3298 7397 7946 448</p>";
+    const foreignIbanEmail = "<p>Nos coordonnées ont changé. IBAN : DE89 3704 0044 0532 0130 00</p>";
+
+    beforeEach(() => {
+      resetIbanGuardAlertBudget();
+      mockSendMail.mockResolvedValue({ messageId: "id" });
+      process.env.IBAN_GUARD_ALERT_TO = "owner@example.com";
+    });
+
+    afterEach(() => {
+      delete process.env.IBAN_GUARD_MODE;
+      delete process.env.IBAN_GUARD_ALERT_TO;
+    });
+
+    it("sends the shop's own bank details untouched, in enforce mode too", async () => {
+      process.env.IBAN_GUARD_MODE = "enforce";
+
+      const req = createMockReq({
+        body: { to: "user@example.com", subject: "Virement", html: shopIbanEmail },
+      });
+      const res = createMockRes();
+
+      await handler(req, res);
+
+      expect(res._status).toBe(200);
+      expect(mockSendMail).toHaveBeenCalledOnce();
+      expect(mockSendMail).toHaveBeenCalledWith(expect.objectContaining({ to: "user@example.com" }));
+    });
+
+    it("monitor mode (default): sends the email, then alerts the owner", async () => {
+      const req = createMockReq({
+        body: { to: "user@example.com", subject: "Virement", html: foreignIbanEmail },
+      });
+      const res = createMockRes();
+
+      await handler(req, res);
+
+      expect(res._status).toBe(200);
+      expect(mockSendMail).toHaveBeenCalledTimes(2);
+      expect(mockSendMail).toHaveBeenCalledWith(
+        expect.objectContaining({ to: "owner@example.com", from: "noreply@example.com" }),
+      );
+      expect(mockSendMail).toHaveBeenCalledWith(expect.objectContaining({ to: "user@example.com" }));
+    });
+
+    it("enforce mode: refuses with 422 and only the alert goes out", async () => {
+      process.env.IBAN_GUARD_MODE = "enforce";
+
+      const req = createMockReq({
+        body: { to: "user@example.com", subject: "Virement", html: foreignIbanEmail },
+      });
+      const res = createMockRes();
+
+      await handler(req, res);
+
+      expect(res._status).toBe(422);
+      expect(mockSendMail).toHaveBeenCalledOnce();
+      expect(mockSendMail).toHaveBeenCalledWith(expect.objectContaining({ to: "owner@example.com" }));
     });
   });
 

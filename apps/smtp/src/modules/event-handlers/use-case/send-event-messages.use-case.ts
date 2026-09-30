@@ -3,11 +3,15 @@ import { err, errAsync, Result, ResultAsync } from "neverthrow";
 import { BaseError } from "../../../errors";
 import { bytesToKb } from "../../../lib/bytes-to-kb";
 import { createLogger } from "../../../logger";
+import { applyIbanGuard } from "../../iban-guard/iban-guard";
 import { SmtpConfiguration } from "../../smtp/configuration/smtp-config-schema";
 import { IGetSmtpConfiguration } from "../../smtp/configuration/smtp-configuration.service";
 import { IEmailCompiler } from "../../smtp/services/email-compiler";
 import { ISMTPEmailSender, SendMailArgs } from "../../smtp/services/smtp-email-sender";
 import { MessageEventTypes } from "../message-event-types";
+
+const escapeHtml = (value: string) =>
+  value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 export class SendEventMessagesUseCase {
   static BaseError = BaseError.subclass("SendEventMessagesUseCaseError");
@@ -44,6 +48,12 @@ export class SendEventMessagesUseCase {
 
   static EventSettingsMissingError = this.NoOpError.subclass("EventSettingsMissingError");
 
+  /**
+   * A no-op on purpose: the guard has already logged and alerted, and a retry from
+   * Saleor would only produce the same email, blocked again, with another alert.
+   */
+  static IbanGuardBlockedError = this.NoOpError.subclass("IbanGuardBlockedError");
+
   private logger = createLogger("SendEventMessagesUseCase");
 
   constructor(
@@ -51,6 +61,8 @@ export class SendEventMessagesUseCase {
       smtpConfigurationService: IGetSmtpConfiguration;
       emailCompiler: IEmailCompiler;
       emailSender: ISMTPEmailSender;
+      /** Injected in tests; defaults to the real guard. */
+      ibanGuard?: typeof applyIbanGuard;
     },
   ) {}
 
@@ -156,9 +168,53 @@ export class SendEventMessagesUseCase {
       };
     }
 
+    const mailData = preparedEmailResult.value;
+
+    /*
+     * Templates are editable from the Dashboard and payload fields come from customers,
+     * so a compiled email can carry an IBAN nobody meant to send.
+     */
+    const ibanGuard = this.deps.ibanGuard ?? applyIbanGuard;
+
+    return ResultAsync.fromSafePromise(
+      ibanGuard({
+        email: mailData,
+        source: `event:${event}`,
+        sendAlert: (alert) =>
+          this.deps.emailSender.sendEmailWithSmtp({
+            smtpSettings,
+            mailData: {
+              from: mailData.from,
+              to: alert.to,
+              subject: alert.subject,
+              text: alert.text,
+              html: `<pre style="font-family:inherit;white-space:pre-wrap">${escapeHtml(
+                alert.text,
+              )}</pre>`,
+            },
+          }),
+      }),
+    ).andThen((verdict) => {
+      if (verdict.blocked) {
+        return errAsync(
+          new SendEventMessagesUseCase.IbanGuardBlockedError(
+            "Email not sent: it contains an IBAN that is not on the allowlist",
+            { props: { event, channelSlug } },
+          ),
+        );
+      }
+
+      return this.sendCompiledEmail(mailData, smtpSettings);
+    });
+  }
+
+  private sendCompiledEmail(
+    mailData: SendMailArgs["mailData"],
+    smtpSettings: SendMailArgs["smtpSettings"],
+  ) {
     return ResultAsync.fromPromise(
       this.deps.emailSender.sendEmailWithSmtp({
-        mailData: preparedEmailResult.value,
+        mailData,
         smtpSettings,
       }),
       (err) => {

@@ -1,7 +1,8 @@
 import { err, errAsync, ok, okAsync } from "neverthrow";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BaseError } from "../../../errors";
+import { resetIbanGuardAlertBudget } from "../../iban-guard/iban-guard";
 import { SmtpConfiguration } from "../../smtp/configuration/smtp-config-schema";
 import {
   FilterConfigurationsArgs,
@@ -311,6 +312,98 @@ describe("SendEventMessagesUseCase", () => {
         });
 
         expect(emailSender.mockSendEmailMethod).toHaveBeenCalledOnce();
+      });
+
+      describe("IBAN guard", () => {
+        const FOREIGN_IBAN = "DE89 3704 0044 0532 0130 00";
+
+        afterEach(() => {
+          vi.unstubAllEnvs();
+        });
+
+        it("Passes the compiled email to the guard and sends it when not blocked", async () => {
+          const ibanGuard = vi.fn(async () => ({ blocked: false, unknownIbans: [] }));
+
+          useCaseInstance = new SendEventMessagesUseCase({
+            emailCompiler,
+            emailSender,
+            smtpConfigurationService,
+            ibanGuard,
+          });
+
+          const result = await useCaseInstance.sendEventMessages({
+            event: EVENT_TYPE,
+            payload: {},
+            channelSlug: "channel-slug",
+            recipientEmail: "recipient@test.com",
+          });
+
+          expect(result.isOk()).toBe(true);
+          expect(ibanGuard).toHaveBeenCalledWith(
+            expect.objectContaining({
+              email: expect.objectContaining({ html: "<html>html text</html>" }),
+              source: `event:${EVENT_TYPE}`,
+            }),
+          );
+          expect(emailSender.mockSendEmailMethod).toHaveBeenCalledOnce();
+        });
+
+        it("Does not send and returns a no-op error when the guard blocks", async () => {
+          useCaseInstance = new SendEventMessagesUseCase({
+            emailCompiler,
+            emailSender,
+            smtpConfigurationService,
+            ibanGuard: async () => ({ blocked: true, unknownIbans: ["DE89370400440532013000"] }),
+          });
+
+          const result = await useCaseInstance.sendEventMessages({
+            event: EVENT_TYPE,
+            payload: {},
+            channelSlug: "channel-slug",
+            recipientEmail: "recipient@test.com",
+          });
+
+          expect(result._unsafeUnwrapErr()[0]).toBeInstanceOf(
+            SendEventMessagesUseCase.IbanGuardBlockedError,
+          );
+          expect(result._unsafeUnwrapErr()[0]).toBeInstanceOf(SendEventMessagesUseCase.NoOpError);
+          expect(emailSender.mockSendEmailMethod).not.toHaveBeenCalled();
+        });
+
+        it("With the real guard in enforce mode, sends only the alert, through the same SMTP settings", async () => {
+          vi.stubEnv("IBAN_GUARD_MODE", "enforce");
+          vi.stubEnv("IBAN_GUARD_ALERT_TO", "owner@shop.test");
+          resetIbanGuardAlertBudget();
+
+          emailCompiler.mockEmailCompileMethod.mockReturnValue(
+            ok({
+              text: `Pay to ${FOREIGN_IBAN}`,
+              from: "Shop <shop@shop.test>",
+              subject: "Your order",
+              html: `<p>New bank details: ${FOREIGN_IBAN}</p>`,
+              to: "recipient@test.com",
+            }),
+          );
+
+          const result = await useCaseInstance.sendEventMessages({
+            event: EVENT_TYPE,
+            payload: {},
+            channelSlug: "channel-slug",
+            recipientEmail: "recipient@test.com",
+          });
+
+          expect(result._unsafeUnwrapErr()[0]).toBeInstanceOf(
+            SendEventMessagesUseCase.IbanGuardBlockedError,
+          );
+          expect(emailSender.mockSendEmailMethod).toHaveBeenCalledOnce();
+
+          const [{ mailData, smtpSettings }] = emailSender.mockSendEmailMethod.mock.calls[0];
+
+          expect(mailData.to).toBe("owner@shop.test");
+          expect(mailData.from).toBe("Shop <shop@shop.test>");
+          expect(mailData.subject).toContain("Alerte sécurité");
+          expect(smtpSettings.host).toBe("localhost");
+        });
       });
     });
   });

@@ -20,7 +20,9 @@
         "ORDER_EXPORT_SMTP_SECURE",
         "ORDER_EXPORT_SMTP_USER",
         "ORDER_EXPORT_SMTP_PASS",
-        "ORDER_EXPORT_SMTP_FROM"
+        "ORDER_EXPORT_SMTP_FROM",
+        "IBAN_GUARD_MODE",
+        "IBAN_GUARD_ALERT_TO"
       ]
     },
     "deploy": {

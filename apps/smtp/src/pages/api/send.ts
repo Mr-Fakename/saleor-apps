@@ -8,6 +8,7 @@ import { NextApiHandler } from "next";
 import nodemailer from "nodemailer";
 
 import { createLogger } from "../../logger";
+import { applyIbanGuard } from "../../modules/iban-guard/iban-guard";
 import { saleorApp } from "../../saleor-app";
 
 const logger = createLogger("api/send");
@@ -114,10 +115,16 @@ const handler: NextApiHandler = async (req, res) => {
     return res.status(statusCode).json({ error: authError });
   }
 
-  const { to, subject, html } = req.body;
+  const { to, subject, html } = req.body ?? {};
 
   if (!to || !subject || !html) {
     return res.status(400).json({ error: "Missing required fields: to, subject, html" });
+  }
+
+  // Strings only. nodemailer reads `html: { path }` / `{ href }` objects as "load this
+  // file or URL", which would let a caller mail themselves files from this container.
+  if (typeof to !== "string" || typeof subject !== "string" || typeof html !== "string") {
+    return res.status(400).json({ error: "Fields to, subject and html must be strings" });
   }
 
   // Use SMTP settings from environment (same as email-bridge pattern)
@@ -144,6 +151,9 @@ const handler: NextApiHandler = async (req, res) => {
       // older TLS (RFC 8996). When secure=true (465) the connection is already implicit TLS.
       requireTLS: !smtpSecure,
       tls: { minVersion: "TLSv1.2" },
+      // Content arrives pre-rendered; never let it pull in local files or remote URLs.
+      disableFileAccess: true,
+      disableUrlAccess: true,
       auth: smtpUser
         ? {
             user: smtpUser,
@@ -161,6 +171,20 @@ const handler: NextApiHandler = async (req, res) => {
       text = convert(html);
     } catch {
       text = undefined;
+    }
+
+    // Whoever holds the API key can mail anyone as the shop, so this is where an IBAN
+    // swap would be attempted. Mail without an IBAN is unaffected.
+    const ibanGuard = await applyIbanGuard({
+      email: { to, subject, html, text },
+      source: "api/send",
+      sendAlert: (alert) => transporter.sendMail({ from: smtpFrom, ...alert }),
+    });
+
+    if (ibanGuard.blocked) {
+      return res.status(422).json({
+        error: "Blocked: the email contains a bank account (IBAN) that is not on the allowlist",
+      });
     }
 
     const info = await transporter.sendMail({
