@@ -1,4 +1,4 @@
-import nodemailer from "nodemailer";
+import nodemailer, { type Transporter } from "nodemailer";
 
 import { BaseError } from "../../../errors";
 import { racePromise } from "../../../lib/race-promise";
@@ -44,7 +44,7 @@ export class SmtpEmailSender implements ISMTPEmailSender {
   async sendEmailWithSmtp({ smtpSettings, mailData }: SendMailArgs) {
     this.logger.debug("Sending an email with SMTP");
 
-    let transporter: nodemailer.Transporter;
+    let transporter: Transporter;
 
     /*
      * https://github.com/nodemailer/nodemailer/issues/1461#issuecomment-1263131029

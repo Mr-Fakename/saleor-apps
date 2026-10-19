@@ -165,6 +165,13 @@ cd saleor-apps/apps/<app-name> && npx vitest run
 cd saleor-apps/apps/<app-name> && npx tsc --noEmit
 ```
 
+**Windows: delete `.next` with `rmdir` before every `next build`.** `.next/standalone`
+holds junctions into the real `node_modules/.pnpm`; when `next build` cleans an old
+`.next` it follows them and EMPTIES the real packages (258 wiped on 2026-10-19; the
+likely cause of the "152 empty packages" seen in September). In cmd/PowerShell run
+`cmd /c "rmdir /s /q .next"` first (it does not follow junctions); if packages are
+already empty: `pnpm install --frozen-lockfile --force`.
+
 If `next build` fails due to `@types/react` version mismatch (`NoSSRWrapper cannot be used as JSX component`), add to `next.config.ts`:
 ```typescript
 typescript: { ignoreBuildErrors: true }
