@@ -6,7 +6,7 @@
 
 **Monorepo Architecture**: Turborepo-managed monorepo of Saleor Apps built with Next.js, TypeScript, and modern tooling.
 
-- `/apps/` - Individual Saleor applications (AvaTax, CMS, Klaviyo, Products Feed, Search, Segment, SMTP, Stripe, NP Atobarai) + example apps (Abandoned Checkouts, Authorize.Net, Checkout Prices, CRM, Customer Insights, Invoices, Klarna)
+- `/apps/` - Individual Saleor applications (AvaTax, CMS, Klaviyo, Products Feed, Search, Segment, SMTP, Stripe, NP Atobarai) + example apps (Abandoned Checkouts, Authorize.Net, Checkout Prices, CRM, Customer Insights, Klarna)
 - `/packages/` - Shared libraries and utilities (domain, errors, logger, otel, UI components, etc.)
 - `/templates/` - App templates for new development
 - Uses PNPM workspaces with workspace dependencies via `workspace:*`

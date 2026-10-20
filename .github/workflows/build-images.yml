@@ -53,7 +53,6 @@ jobs:
             customer-extensions: ["apps/customer-extensions/**"]
             digital-downloads: ["apps/digital-downloads/**"]
             b2b-tax-manager: ["apps/b2b-tax-manager/**"]
-            invoices: ["apps/example-app-invoices/**"]
 
   build:
     needs: changes
@@ -69,11 +68,6 @@ jobs:
           - { app: customer-extensions, image: customer-extensions-app, dir: apps/customer-extensions }
           - { app: digital-downloads,   image: digital-downloads-app,   dir: apps/digital-downloads }
           - { app: b2b-tax-manager,     image: b2b-tax-manager-app,     dir: apps/b2b-tax-manager }
-          # invoices lives in a legacy dir name; built via the root Dockerfile
-          # like every sibling (its old standalone Dockerfile kept failing in
-          # CI: stale lockfile, then pnpm-10 build-script blocking with no
-          # workspace-level allow-list available)
-          - { app: invoices,            image: invoices-app,            dir: apps/example-app-invoices, app_name: example-app-invoices }
     steps:
       - name: Gate — should this app build?
         id: gate
