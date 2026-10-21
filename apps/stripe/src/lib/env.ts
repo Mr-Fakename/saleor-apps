@@ -36,6 +36,11 @@ export const env = createEnv({
     AWS_SECRET_ACCESS_KEY: z.string(),
     APPSTORE_URL: z.string().optional(),
     APP_NAME: z.string().optional().default("Stripe"),
+    /**
+     * Comma-separated browser origins allowed to call /api/update-payment-intent directly.
+     * Unset = none: the storefronts call it server-to-server through their own proxy.
+     */
+    UPDATE_PAYMENT_INTENT_ALLOWED_ORIGINS: z.string().optional(),
   },
   shared: {
     NODE_ENV: z.enum(["development", "production", "test"]).optional().default("development"),
@@ -67,6 +72,7 @@ export const env = createEnv({
     AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY,
     APPSTORE_URL: process.env.APPSTORE_URL,
     APP_NAME: process.env.APP_NAME,
+    UPDATE_PAYMENT_INTENT_ALLOWED_ORIGINS: process.env.UPDATE_PAYMENT_INTENT_ALLOWED_ORIGINS,
   },
   isServer: typeof window === "undefined" || process.env.NODE_ENV === "test",
   onValidationError(issues) {

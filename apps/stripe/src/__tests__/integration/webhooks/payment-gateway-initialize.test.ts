@@ -1,15 +1,18 @@
 import { DynamoAPL } from "@saleor/app-sdk/APL/dynamodb";
 import { Encryptor } from "@saleor/apps-shared/encryptor";
 import { testApiHandler } from "next-test-api-route-handler";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import { paymentGatewayInitializeFixture } from "@/__tests__/integration/webhooks/fixtures/payment-gateway-initialize-fixture";
 import { mockedSaleorAppId, mockedSaleorChannelId } from "@/__tests__/mocks/constants";
 import { mockedStripePublishableKey } from "@/__tests__/mocks/mocked-stripe-publishable-key";
 import { mockedStripeRestrictedKey } from "@/__tests__/mocks/mocked-stripe-restricted-key";
 import { mockStripeWebhookSecret } from "@/__tests__/mocks/stripe-webhook-secret";
+import {
+  createSaleorSigningKeys,
+  signSaleorWebhookBody,
+} from "@/__tests__/mocks/saleor-webhook-signature";
 import * as paymentGatewayInitializeSessionHandlers from "@/app/api/webhooks/saleor/payment-gateway-initialize-session/route";
-import * as verifyWebhookSignatureModule from "@/app/api/webhooks/saleor/verify-signature";
 import { RandomId } from "@/lib/random-id";
 import { StripeConfig } from "@/modules/app-config/domain/stripe-config";
 import { DynamoDbChannelConfigMapping } from "@/modules/app-config/repositories/dynamodb/channel-config-mapping-db-model";
@@ -36,17 +39,16 @@ const apl = DynamoAPL.create({
   table: dynamoMainTable,
 });
 
+// Signs webhook bodies like Saleor; its JWKS is stored in the APL below (NR-28).
+const saleorSigningKeys = createSaleorSigningKeys();
+
 describe("PaymentGatewayInitialize webhook: integration", async () => {
   beforeEach(async () => {
-    vi.spyOn(verifyWebhookSignatureModule, "verifyWebhookSignature").mockImplementation(
-      async () => {},
-    );
-
     await apl.set({
       saleorApiUrl: realSaleorApiUrl,
       appId: mockedSaleorAppId,
       token: "mocked-token",
-      jwks: "{}",
+      jwks: saleorSigningKeys.jwks,
     });
 
     await repo.saveStripeConfig({
@@ -78,13 +80,14 @@ describe("PaymentGatewayInitialize webhook: integration", async () => {
     await testApiHandler({
       appHandler: paymentGatewayInitializeSessionHandlers,
       async test({ fetch }) {
+        const rawBody = JSON.stringify(paymentGatewayInitializeFixture());
         const response = await fetch({
           method: "POST",
-          body: JSON.stringify(paymentGatewayInitializeFixture()),
+          body: rawBody,
           headers: new Headers({
             "saleor-api-url": realSaleorApiUrl,
             "saleor-event": "payment_gateway_initialize_session",
-            "saleor-signature": "mock-signature",
+            "saleor-signature": signSaleorWebhookBody(rawBody, saleorSigningKeys),
           }),
         });
 

@@ -1,7 +1,7 @@
 import { DynamoAPL } from "@saleor/app-sdk/APL/dynamodb";
 import { Encryptor } from "@saleor/apps-shared/encryptor";
 import { testApiHandler } from "next-test-api-route-handler";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   mockedSaleorAppId,
@@ -9,8 +9,11 @@ import {
   mockedSaleorTransactionId,
 } from "@/__tests__/mocks/constants";
 import { mockStripeWebhookSecret } from "@/__tests__/mocks/stripe-webhook-secret";
+import {
+  createSaleorSigningKeys,
+  signSaleorWebhookBody,
+} from "@/__tests__/mocks/saleor-webhook-signature";
 import * as transactionProcessSession from "@/app/api/webhooks/saleor/transaction-process-session/route";
-import * as verifyWebhookSignatureModule from "@/app/api/webhooks/saleor/verify-signature";
 import { RandomId } from "@/lib/random-id";
 import { StripeConfig } from "@/modules/app-config/domain/stripe-config";
 import { DynamoDbChannelConfigMapping } from "@/modules/app-config/repositories/dynamodb/channel-config-mapping-db-model";
@@ -63,17 +66,16 @@ const stripeMoney = StripeMoney.createFromSaleorAmount({
   currency: "USD",
 })._unsafeUnwrap();
 
+// Signs webhook bodies like Saleor; its JWKS is stored in the APL below (NR-28).
+const saleorSigningKeys = createSaleorSigningKeys();
+
 describe("TransactionProcessSession webhook: integration", async () => {
   beforeEach(async () => {
-    vi.spyOn(verifyWebhookSignatureModule, "verifyWebhookSignature").mockImplementation(
-      async () => {},
-    );
-
     await apl.set({
       saleorApiUrl: realSaleorApiUrl,
       appId: mockedSaleorAppId,
       token: "mocked-token",
-      jwks: "{}",
+      jwks: saleorSigningKeys.jwks,
     });
 
     await configRepo.saveStripeConfig({
@@ -139,15 +141,16 @@ describe("TransactionProcessSession webhook: integration", async () => {
     await testApiHandler({
       appHandler: transactionProcessSession,
       async test({ fetch }) {
+        const rawBody = JSON.stringify(
+          transactionProcessSessionFixture(stripePaymentIntentId, saleorTransactionFlow),
+        );
         const response = await fetch({
           method: "POST",
-          body: JSON.stringify(
-            transactionProcessSessionFixture(stripePaymentIntentId, saleorTransactionFlow),
-          ),
+          body: rawBody,
           headers: new Headers({
             "saleor-api-url": realSaleorApiUrl,
             "saleor-event": "transaction_process_session",
-            "saleor-signature": "mock-signature",
+            "saleor-signature": signSaleorWebhookBody(rawBody, saleorSigningKeys),
           }),
         });
 
@@ -210,15 +213,16 @@ describe("TransactionProcessSession webhook: integration", async () => {
     await testApiHandler({
       appHandler: transactionProcessSession,
       async test({ fetch }) {
+        const rawBody = JSON.stringify(
+          transactionProcessSessionFixture(stripePaymentIntentId, saleorTransactionFlow),
+        );
         const response = await fetch({
           method: "POST",
-          body: JSON.stringify(
-            transactionProcessSessionFixture(stripePaymentIntentId, saleorTransactionFlow),
-          ),
+          body: rawBody,
           headers: new Headers({
             "saleor-api-url": realSaleorApiUrl,
             "saleor-event": "transaction_process_session",
-            "saleor-signature": "mock-signature",
+            "saleor-signature": signSaleorWebhookBody(rawBody, saleorSigningKeys),
           }),
         });
 

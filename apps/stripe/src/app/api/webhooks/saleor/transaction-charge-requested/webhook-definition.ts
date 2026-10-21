@@ -6,8 +6,12 @@ import {
 } from "@/generated/graphql";
 import { saleorApp } from "@/lib/saleor-app";
 
-import { verifyWebhookSignature } from "../verify-signature";
+import { logRejectedSaleorWebhook } from "../log-rejected-webhook";
 
+/**
+ * Signature verification is the SDK default (`verifySignatureWithJwks`, JWKS refreshed
+ * once on failure, 401 if it still fails). Never override `verifySignatureFn` (NR-28).
+ */
 export const transactionChargeRequestedWebhookDefinition =
   new SaleorSyncWebhook<TransactionChargeRequestedEventFragment>({
     apl: saleorApp.apl,
@@ -16,7 +20,5 @@ export const transactionChargeRequestedWebhookDefinition =
     isActive: true,
     query: TransactionChargeRequestedDocument,
     webhookPath: "api/webhooks/saleor/transaction-charge-requested",
-    verifySignatureFn: (jwks, signature, rawBody) => {
-      return verifyWebhookSignature(jwks, signature, rawBody);
-    },
+    onError: logRejectedSaleorWebhook("TRANSACTION_CHARGE_REQUESTED"),
   });

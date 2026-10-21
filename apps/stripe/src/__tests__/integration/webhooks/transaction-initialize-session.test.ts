@@ -1,13 +1,16 @@
 import { DynamoAPL } from "@saleor/app-sdk/APL/dynamodb";
 import { Encryptor } from "@saleor/apps-shared/encryptor";
 import { testApiHandler } from "next-test-api-route-handler";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import { transactionInitializeSessionFixture } from "@/__tests__/integration/webhooks/fixtures/transaction-initialize-session-fixture";
 import { mockedSaleorAppId, mockedSaleorChannelId } from "@/__tests__/mocks/constants";
 import { mockStripeWebhookSecret } from "@/__tests__/mocks/stripe-webhook-secret";
+import {
+  createSaleorSigningKeys,
+  signSaleorWebhookBody,
+} from "@/__tests__/mocks/saleor-webhook-signature";
 import * as initializeSessionHandlers from "@/app/api/webhooks/saleor/transaction-initialize-session/route";
-import * as verifyWebhookSignatureModule from "@/app/api/webhooks/saleor/verify-signature";
 import { RandomId } from "@/lib/random-id";
 import { StripeConfig } from "@/modules/app-config/domain/stripe-config";
 import { DynamoDbChannelConfigMapping } from "@/modules/app-config/repositories/dynamodb/channel-config-mapping-db-model";
@@ -36,17 +39,16 @@ const apl = DynamoAPL.create({
   table: dynamoMainTable,
 });
 
+// Signs webhook bodies like Saleor; its JWKS is stored in the APL below (NR-28).
+const saleorSigningKeys = createSaleorSigningKeys();
+
 describe("TransactionInitializeSession webhook: integration", async () => {
   beforeEach(async () => {
-    vi.spyOn(verifyWebhookSignatureModule, "verifyWebhookSignature").mockImplementation(
-      async () => {},
-    );
-
     await apl.set({
       saleorApiUrl: realSaleorApiUrl,
       appId: mockedSaleorAppId,
       token: "mocked-token",
-      jwks: "{}",
+      jwks: saleorSigningKeys.jwks,
     });
 
     await repo.saveStripeConfig({
@@ -78,13 +80,14 @@ describe("TransactionInitializeSession webhook: integration", async () => {
     await testApiHandler({
       appHandler: initializeSessionHandlers,
       async test({ fetch }) {
+        const rawBody = JSON.stringify(transactionInitializeSessionFixture());
         const response = await fetch({
           method: "POST",
-          body: JSON.stringify(transactionInitializeSessionFixture()),
+          body: rawBody,
           headers: new Headers({
             "saleor-api-url": realSaleorApiUrl,
             "saleor-event": "transaction_initialize_session",
-            "saleor-signature": "mock-signature",
+            "saleor-signature": signSaleorWebhookBody(rawBody, saleorSigningKeys),
           }),
         });
 

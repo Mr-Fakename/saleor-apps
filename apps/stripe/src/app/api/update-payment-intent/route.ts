@@ -1,118 +1,139 @@
 import { NextRequest } from "next/server";
 
-import { appConfigRepoImpl } from "@/modules/app-config/repositories/app-config-repo-impl";
-import { createSaleorApiUrl } from "@/modules/saleor/saleor-api-url";
-import { StripePaymentIntentsApi } from "@/modules/stripe/stripe-payment-intents-api";
-import { createStripePaymentIntentId } from "@/modules/stripe/stripe-payment-intent-id";
-import { StripeMoney } from "@/modules/stripe/stripe-money";
+import { env } from "@/lib/env";
+import { createInstrumentedGraphqlClient } from "@/lib/graphql-client";
 import { createLogger } from "@/lib/logger";
 import { saleorApp } from "@/lib/saleor-app";
+import { appConfigRepoImpl } from "@/modules/app-config/repositories/app-config-repo-impl";
+import { CheckoutPaymentStateFetcher } from "@/modules/saleor/checkout-payment-state-fetcher";
+import { StripePaymentIntentsApiFactory } from "@/modules/stripe/stripe-payment-intents-api-factory";
+
+import { RequestOriginPolicy } from "./request-origin-policy";
+import { UpdatePaymentIntentAmountUseCase, updatePaymentIntentRequestSchema } from "./use-case";
 
 const logger = createLogger("update-payment-intent");
 
+const originPolicy = RequestOriginPolicy.fromAllowList(env.UPDATE_PAYMENT_INTENT_ALLOWED_ORIGINS);
+
+const useCase = new UpdatePaymentIntentAmountUseCase({
+  apl: saleorApp.apl,
+  appConfigRepo: appConfigRepoImpl,
+  stripePaymentIntentsApiFactory: new StripePaymentIntentsApiFactory(),
+  checkoutPaymentStateFetcherFactory: (authData) =>
+    new CheckoutPaymentStateFetcher(
+      createInstrumentedGraphqlClient({
+        // The APL's https-enforced URL, so the app token never goes out over plain http.
+        saleorApiUrl: authData.saleorApiUrl,
+        token: authData.token,
+      }),
+    ),
+});
+
+const forbiddenOriginResponse = () =>
+  Response.json({ error: "Origin not allowed" }, { status: 403 });
+
 /**
- * Direct PaymentIntent amount update endpoint.
+ * CORS preflight. Only reachable for origins in UPDATE_PAYMENT_INTENT_ALLOWED_ORIGINS;
+ * the storefront proxies call POST server-to-server and never preflight.
+ */
+export async function OPTIONS(req: NextRequest) {
+  const decision = originPolicy.evaluate(req.headers.get("origin"));
+
+  if (!decision.allowed || Object.keys(decision.corsHeaders).length === 0) {
+    return new Response(null, { status: 403 });
+  }
+
+  return new Response(null, {
+    status: 204,
+    headers: {
+      ...decision.corsHeaders,
+      "Access-Control-Allow-Methods": "POST",
+      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Max-Age": "600",
+    },
+  });
+}
+
+/**
+ * Re-syncs an existing PaymentIntent's amount to its Saleor checkout.
  *
- * Called by the storefront when a checkout total changes (e.g. PayPal fee toggle)
- * and the existing PaymentIntent needs its amount updated WITHOUT creating a new
- * Saleor transaction. This avoids the pspReference uniqueness conflict that occurs
- * when transactionInitialize tries to reuse an existing PI on a new transaction.
+ * Called by the storefront when the checkout total changes (e.g. PayPal fee line
+ * added/removed) so the PaymentIntent follows WITHOUT a new Saleor transaction. The
+ * clientSecret stays valid, so Elements does not remount.
  *
- * The clientSecret remains valid after the update — no Elements remount needed.
+ * The amount is computed on the server from the checkout (see use-case.ts); the body's
+ * `amount` is only compared and logged (regression NR-02).
  */
 export async function POST(req: NextRequest) {
-  try {
-    const body = (await req.json()) as {
-      paymentIntentId?: string;
-      amount?: number;
-      currency?: string;
-      channelId?: string;
-      saleorApiUrl?: string;
-    };
+  const decision = originPolicy.evaluate(req.headers.get("origin"));
 
-    if (!body.paymentIntentId || !body.amount || !body.currency || !body.channelId || !body.saleorApiUrl) {
+  if (!decision.allowed) {
+    logger.warn("Rejected request from a browser origin that is not allowed", {
+      origin: decision.origin,
+    });
+
+    return forbiddenOriginResponse();
+  }
+
+  const headers = decision.corsHeaders;
+
+  try {
+    let body: unknown;
+
+    try {
+      body = await req.json();
+    } catch {
+      return Response.json({ error: "Request body must be JSON" }, { status: 400, headers });
+    }
+
+    const parsedBody = updatePaymentIntentRequestSchema.safeParse(body);
+
+    if (!parsedBody.success) {
       return Response.json(
-        { error: "Missing required fields: paymentIntentId, amount, currency, channelId, saleorApiUrl" },
-        { status: 400 },
+        {
+          error:
+            "Missing or invalid required fields: paymentIntentId, amount, currency, channelId, saleorApiUrl",
+        },
+        { status: 400, headers },
       );
     }
 
-    // Validate Saleor API URL
-    const saleorApiUrlResult = createSaleorApiUrl(body.saleorApiUrl);
-    if (saleorApiUrlResult.isErr()) {
-      return Response.json({ error: "Invalid saleorApiUrl" }, { status: 400 });
-    }
-    const saleorApiUrl = saleorApiUrlResult.value;
+    const result = await useCase.execute(parsedBody.data);
 
-    // Get app auth data (needed for appId to look up config)
-    const authData = await saleorApp.apl.get(saleorApiUrl);
-    if (!authData) {
-      logger.error("No auth data found", { saleorApiUrl });
-      return Response.json({ error: "App not installed for this Saleor instance" }, { status: 401 });
-    }
+    return result.match(
+      (success) =>
+        Response.json(
+          {
+            success: true,
+            paymentIntentId: success.paymentIntentId,
+            amount: success.amount,
+            currency: success.currency,
+          },
+          { headers },
+        ),
+      (error) => {
+        const logAttributes = {
+          paymentIntentId: parsedBody.data.paymentIntentId,
+          channelId: parsedBody.data.channelId,
+          httpStatus: error.httpStatus,
+          error,
+        };
 
-    // Get Stripe config for this channel
-    const configResult = await appConfigRepoImpl.getStripeConfig({
-      channelId: body.channelId,
-      appId: authData.appId,
-      saleorApiUrl,
-    });
+        if (error.httpStatus >= 500) {
+          logger.error("PaymentIntent amount update failed", logAttributes);
+        } else {
+          logger.warn("PaymentIntent amount update refused", logAttributes);
+        }
 
-    if (configResult.isErr()) {
-      logger.error("Failed to get Stripe config", { error: configResult.error });
-      return Response.json({ error: "Failed to retrieve Stripe configuration" }, { status: 500 });
-    }
-
-    const stripeConfig = configResult.value;
-    if (!stripeConfig) {
-      logger.warn("No Stripe config for channel", { channelId: body.channelId });
-      return Response.json({ error: "Stripe not configured for this channel" }, { status: 404 });
-    }
-
-    // Convert amount
-    const moneyResult = StripeMoney.createFromSaleorAmount({
-      amount: body.amount,
-      currency: body.currency,
-    });
-
-    if (moneyResult.isErr()) {
-      return Response.json({ error: moneyResult.error.message }, { status: 400 });
-    }
-
-    // Update the PaymentIntent directly in Stripe
-    const stripeApi = StripePaymentIntentsApi.createFromKey({ key: stripeConfig.restrictedKey });
-
-    const paymentIntentId = createStripePaymentIntentId(body.paymentIntentId);
-
-    const updateResult = await stripeApi.updatePaymentIntent({
-      id: paymentIntentId,
-      stripeMoney: moneyResult.value,
-    });
-
-    if (updateResult.isErr()) {
-      logger.error("Stripe updatePaymentIntent failed", {
-        paymentIntentId: body.paymentIntentId,
-        error: updateResult.error,
-      });
-      return Response.json({ error: "Failed to update payment intent" }, { status: 500 });
-    }
-
-    const pi = updateResult.value;
-
-    logger.info("PaymentIntent amount updated", {
-      paymentIntentId: pi.id,
-      amount: pi.amount,
-      currency: pi.currency,
-    });
-
-    return Response.json({
-      success: true,
-      paymentIntentId: pi.id,
-      amount: pi.amount,
-      currency: pi.currency,
-    });
+        return Response.json(
+          { error: error.publicMessage },
+          { status: error.httpStatus, headers },
+        );
+      },
+    );
   } catch (error) {
     logger.error("Unhandled error", { error });
-    return Response.json({ error: "Internal server error" }, { status: 500 });
+
+    return Response.json({ error: "Internal server error" }, { status: 500, headers });
   }
 }

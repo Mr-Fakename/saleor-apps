@@ -1,0 +1,34 @@
+query FetchCheckoutPaymentState($checkoutId: ID!) {
+  checkout(id: $checkoutId) {
+    id
+    channel {
+      id
+    }
+    totalPrice {
+      gross {
+        amount
+        currency
+      }
+    }
+    transactions {
+      id
+      pspReference
+      chargedAmount {
+        amount
+        currency
+      }
+      authorizedAmount {
+        amount
+        currency
+      }
+      chargePendingAmount {
+        amount
+        currency
+      }
+      authorizePendingAmount {
+        amount
+        currency
+      }
+    }
+  }
+}

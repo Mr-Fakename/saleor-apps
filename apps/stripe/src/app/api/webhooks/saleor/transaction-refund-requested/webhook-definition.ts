@@ -5,13 +5,19 @@ import {
   TransactionRefundRequestedEventFragment,
 } from "@/generated/graphql";
 import { saleorApp } from "@/lib/saleor-app";
-import { createLogger } from "@/lib/logger";
 
-import { verifyWebhookSignature } from "../verify-signature";
-import { httpsJwksVerifier } from "../https-jwks-verifier";
+import { logRejectedSaleorWebhook } from "../log-rejected-webhook";
 
-const logger = createLogger("transactionRefundRequestedWebhookDefinition");
-
+/**
+ * Signature verification is the SDK default (`verifySignatureWithJwks` from
+ * `@saleor/app-sdk/auth`): the detached JWS in `saleor-signature` is checked against the
+ * JWKS stored for the registered Saleor, refreshed once from that Saleor's
+ * `/.well-known/jwks.json` on failure, and the webhook is rejected (401) if it still fails.
+ *
+ * Never pass a `verifySignatureFn` that skips or swallows verification: this handler
+ * creates Stripe refunds from the payload, so a forged webhook refunds a real payment
+ * (regression NR-28).
+ */
 export const transactionRefundRequestedWebhookDefinition =
   new SaleorSyncWebhook<TransactionRefundRequestedEventFragment>({
     apl: saleorApp.apl,
@@ -20,13 +26,5 @@ export const transactionRefundRequestedWebhookDefinition =
     isActive: true,
     query: TransactionRefundRequestedDocument,
     webhookPath: "api/webhooks/saleor/transaction-refund-requested",
-    verifySignatureFn: (jwks, signature, rawBody) => {
-      // TEMPORARY: Bypass signature verification for refund webhooks
-      // TODO: Restore proper signature verification once core JWKS issue is resolved
-      logger.warn("Bypassing signature verification for refund webhook", {
-        reason: "JWKS signature verification issue - needs investigation",
-      });
-
-      return Promise.resolve();
-    },
+    onError: logRejectedSaleorWebhook("TRANSACTION_REFUND_REQUESTED"),
   });

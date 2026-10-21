@@ -1,12 +1,17 @@
 import { SaleorSyncWebhook } from "@saleor/app-sdk/handlers/next-app-router";
 
-import { verifyWebhookSignature } from "@/app/api/webhooks/saleor/verify-signature";
 import {
   PaymentGatewayInitializeSessionDocument,
   PaymentGatewayInitializeSessionEventFragment,
 } from "@/generated/graphql";
 import { saleorApp } from "@/lib/saleor-app";
 
+import { logRejectedSaleorWebhook } from "../log-rejected-webhook";
+
+/**
+ * Signature verification is the SDK default (`verifySignatureWithJwks`, JWKS refreshed
+ * once on failure, 401 if it still fails). Never override `verifySignatureFn` (NR-28).
+ */
 export const paymentGatewayInitializeSessionWebhookDefinition =
   new SaleorSyncWebhook<PaymentGatewayInitializeSessionEventFragment>({
     apl: saleorApp.apl,
@@ -15,7 +20,5 @@ export const paymentGatewayInitializeSessionWebhookDefinition =
     isActive: true,
     query: PaymentGatewayInitializeSessionDocument,
     webhookPath: "api/webhooks/saleor/payment-gateway-initialize-session",
-    verifySignatureFn: (jwks, signature, rawBody) => {
-      return verifyWebhookSignature(jwks, signature, rawBody);
-    },
+    onError: logRejectedSaleorWebhook("PAYMENT_GATEWAY_INITIALIZE_SESSION"),
   });
