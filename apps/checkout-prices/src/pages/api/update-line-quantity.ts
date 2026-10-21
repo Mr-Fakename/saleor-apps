@@ -10,6 +10,7 @@ import {
 // Note: The GraphQL mutations CheckoutLinesUpdate and CheckoutLinesDelete
 // should be generated after running the code generator
 import { createClient } from "../../lib/create-graphql-client";
+import { handleCors } from "../../lib/cors";
 import { getVariantPrice } from "../../lib/get-variant-price";
 import { DEFAULT_CHANNEL, SALEOR_API_URL } from "../../const";
 import { apl } from "../../saleor-app";
@@ -28,6 +29,15 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<UpdateLineQuantityResponseData>
 ) {
+  // Caller: the storefront server (no Origin). Cross-origin browsers only via ALLOWED_ORIGINS.
+  if (handleCors(req, res, { methods: ["POST", "OPTIONS"] })) {
+    return;
+  }
+
+  if (req.method !== "POST") {
+    return res.status(405).json({ errorMessage: "Method not allowed" });
+  }
+
   console.info("Update line quantity has been called");
 
   // Validation of incoming data

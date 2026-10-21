@@ -7,6 +7,7 @@ import {
   GetVariantDetailsDocument,
 } from "../../../generated/graphql";
 import { createClient } from "../../lib/create-graphql-client";
+import { handleCors } from "../../lib/cors";
 import { getVariantPrice } from "../../lib/get-variant-price";
 import { DEFAULT_CHANNEL, SALEOR_API_URL } from "../../const";
 import { apl } from "../../saleor-app";
@@ -17,6 +18,7 @@ type SuccessfulResponse = {
 
 type ErrorResponse = {
   errorMessage: string;
+  errors?: Array<{ field?: string | null; message?: string | null; code: string }>;
 };
 
 export type AddToCartResponseData = SuccessfulResponse | ErrorResponse;
@@ -25,6 +27,16 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<AddToCartResponseData>
 ) {
+  // Callers: the storefront server (no Origin) and this app's own /storefront
+  // demo page (same host). Cross-origin browsers only via ALLOWED_ORIGINS.
+  if (handleCors(req, res, { methods: ["POST", "OPTIONS"] })) {
+    return;
+  }
+
+  if (req.method !== "POST") {
+    return res.status(405).json({ errorMessage: "Method not allowed" });
+  }
+
   console.info("Add to cart has been called");
 
   // Validation of incoming data

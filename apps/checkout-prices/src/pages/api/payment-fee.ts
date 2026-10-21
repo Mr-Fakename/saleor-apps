@@ -1,46 +1,40 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+
 import {
   AddLinesToCheckoutDocument,
   CheckoutDetailsFragment,
   CheckoutLinesDeleteDocument,
   GetCheckoutDetailsDocument,
 } from "../../../generated/graphql";
-import { createClient } from "../../lib/create-graphql-client";
-import { DEFAULT_CHANNEL, SALEOR_API_URL } from "../../const";
-import { apl } from "../../saleor-app";
+import { createAppGraphQLClient } from "../../lib/app-graphql-client";
+import { handleCors } from "../../lib/cors";
+import { checkoutLogRef, isCheckoutId } from "../../lib/saleor-ids";
+import {
+  centsToDecimalString,
+  computeFeeCents,
+  feeDisplayName,
+  feeMetadataValue,
+  isPaymentFeeLine,
+  isValidCallerRatePercent,
+  PAYMENT_FEE_METADATA_KEY,
+  readPaymentFeeConfig,
+  toCents,
+} from "../../modules/payment-fee/payment-fee";
+import { PaymentFeeCheckoutDocument } from "../../modules/payment-fee/payment-fee-checkout-query";
 
-// This endpoint adds or removes a dynamic PayPal payment fee line on a checkout.
-// The fee amount should be provided by the caller (storefront) to avoid
-// discrepancies from missing fields in our local fragment (e.g., shipping).
-// The line is created using a dedicated service variant, configured via env.
-// Required env: PAYMENT_FEE_VARIANT_ID
-
-const PAYMENT_FEE_METADATA_KEY = "payment_fee_type";
-
-// Default PayPal service fee rate, as a percentage. The storefront owns the
-// rate -- it computes the fee amount it sends us -- and passes it as
-// `ratePercent`; this default only covers callers that predate that field.
-const DEFAULT_FEE_RATE_PERCENT = 1.5;
-
-// 1.5 -> "1.5", 1.50 -> "1.5", 3 -> "3"
-function formatRate(ratePercent: number): string {
-  return String(Number(ratePercent.toFixed(2)));
-}
-
-// The marker written onto new fee lines. The rate is embedded for
-// auditability, so this value changes whenever the rate does -- which is
-// exactly why every LOOKUP below matches on PAYMENT_FEE_METADATA_KEY ALONE.
-// This app writes no other kind of payment-fee line, so the key is
-// unambiguous on its own, and key-only matching keeps a checkout created
-// before a rate change removable after it (otherwise the stale line would be
-// invisible to the remover and the customer would be charged twice).
-function feeMetadataValue(ratePercent: number): string {
-  return `paypal_${formatRate(ratePercent)}_percent`;
-}
-
-function feeDisplayName(ratePercent: number): string {
-  return `Service fee (${formatRate(ratePercent)}%)`;
-}
+// Adds (apply=true) or removes (apply=false) the PayPal service-fee line on a
+// checkout. The line uses a dedicated service variant (env
+// PAYMENT_FEE_VARIANT_ID) with a custom price the app COMPUTES:
+// rate (env PAYMENT_FEE_RATE_PERCENT, default 1.5) × the checkout's
+// fee-exclusive total as Saleor reports it — see modules/payment-fee.
+// Caller-supplied `amount`/`ratePercent`/`currency` are accepted for
+// compatibility with existing storefront builds but never charged.
+//
+// Callers: the storefront browser (StripeCheckoutForm, PaymentRedirectHandler
+// — cross-origin, allowlisted via ALLOWED_ORIGINS) and the storefront server
+// (cart page fee cleanup — no Origin header). Ownership proof is the checkout
+// ID itself (see lib/saleor-ids.ts): exactly what Saleor's public API accepts
+// for the same checkout mutations.
 
 type SuccessfulResponse = {
   checkout: CheckoutDetailsFragment;
@@ -52,173 +46,192 @@ type ErrorResponse = {
 
 export type PaymentFeeResponse = SuccessfulResponse | ErrorResponse;
 
-// This endpoint is called directly from the storefront browser (a client
-// component in the Stripe payment section), which is a different origin than the
-// app (e.g. dess-equipement.com -> checkout-prices.dess-equipement.com). A JSON
-// POST triggers a CORS preflight, so we must answer OPTIONS and echo the
-// allow-origin headers, otherwise the browser blocks the request and the fee is
-// silently never applied. No credentials are used (the app authenticates with
-// its own token), so reflecting the request Origin is safe and keeps the app
-// environment-agnostic.
-function setCorsHeaders(req: NextApiRequest, res: NextApiResponse) {
-  const origin = req.headers.origin;
-  res.setHeader("Access-Control-Allow-Origin", origin || "*");
-  res.setHeader("Vary", "Origin");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  res.setHeader("Access-Control-Max-Age", "86400");
+type SaleorMutationError = { code: string; message?: string | null };
+
+function describeErrors(errors: ReadonlyArray<SaleorMutationError> | null | undefined, fallback: string): string {
+  return errors && errors.length > 0
+    ? errors.map((e) => `${e.code}: ${e.message ?? "no message"}`).join("; ")
+    : fallback;
 }
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse<PaymentFeeResponse>,
-) {
-  setCorsHeaders(req, res);
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
-  if (req.method === "OPTIONS") {
-    return res.status(204).end();
+export default async function handler(req: NextApiRequest, res: NextApiResponse<PaymentFeeResponse>) {
+  if (handleCors(req, res, { methods: ["POST", "OPTIONS"] })) {
+    return;
   }
 
   if (req.method !== "POST") {
     return res.status(405).json({ errorMessage: "Method not allowed" });
   }
 
-  const { checkoutId, apply, amount, currency, ratePercent } = req.body as {
-    checkoutId?: string;
-    apply?: boolean; // true to add/update fee, false to remove
-    amount?: number | string; // fee amount to set when apply=true
-    currency?: string; // ISO currency for the price
-    ratePercent?: number; // fee rate the caller used, e.g. 1.5 -- label/marker only
-  };
+  const body = isRecord(req.body) ? req.body : {};
+  const { checkoutId, apply, amount, ratePercent } = body;
 
-  if (!checkoutId) {
+  if (checkoutId === undefined || checkoutId === null || checkoutId === "") {
     return res.status(400).json({ errorMessage: "checkoutId has not been provided" });
+  }
+  if (!isCheckoutId(checkoutId)) {
+    return res.status(400).json({ errorMessage: "checkoutId is not a valid checkout ID" });
   }
   if (apply === undefined) {
     return res.status(400).json({ errorMessage: "apply flag has not been provided" });
   }
-  if (
-    ratePercent !== undefined &&
-    (typeof ratePercent !== "number" ||
-      !Number.isFinite(ratePercent) ||
-      ratePercent <= 0 ||
-      ratePercent > 100)
-  ) {
+  if (typeof apply !== "boolean") {
+    return res.status(400).json({ errorMessage: "apply must be a boolean" });
+  }
+  if (ratePercent !== undefined && !isValidCallerRatePercent(ratePercent)) {
     return res.status(400).json({ errorMessage: "ratePercent must be a number in (0, 100]" });
   }
 
-  // Label/marker only. The charged amount is always the caller-supplied
-  // `amount`; this never recomputes it.
-  const effectiveRatePercent = ratePercent ?? DEFAULT_FEE_RATE_PERCENT;
+  // null when removing: that path needs no fee configuration.
+  const feeConfig = apply ? readPaymentFeeConfig() : null;
 
-  const FEE_VARIANT_ID = process.env.PAYMENT_FEE_VARIANT_ID;
-  if (!FEE_VARIANT_ID && apply) {
-    return res.status(500).json({
-      errorMessage:
-        "PAYMENT_FEE_VARIANT_ID is not configured. Please set a service variant ID for fee lines.",
-    });
+  if (feeConfig && !feeConfig.ok) {
+    console.error(`[payment-fee] Refusing to charge a fee: ${feeConfig.error}`);
+
+    return res.status(500).json({ errorMessage: feeConfig.error });
   }
 
-  const client = createClient(SALEOR_API_URL, async () => {
-    let authData = await apl.get(SALEOR_API_URL);
-    if (!authData) {
-      const all = await apl.getAll();
-      if (all.length > 0) authData = all[0];
-    }
-    if (!authData) {
-      throw new Error("No auth data found. Is the app installed?");
-    }
-    return Promise.resolve({ token: authData.token });
-  });
+  const logRef = checkoutLogRef(checkoutId);
+  const client = createAppGraphQLClient("payment-fee");
 
-  // Fetch current checkout to find existing fee line if any
-  const checkoutQuery = await client
-    .query(GetCheckoutDetailsDocument, { id: checkoutId })
-    .toPromise();
+  const fetchDetails = async (): Promise<CheckoutDetailsFragment | null> => {
+    const details = await client
+      .query(GetCheckoutDetailsDocument, { id: checkoutId }, { requestPolicy: "network-only" })
+      .toPromise();
 
-  if (checkoutQuery.error) {
+    return details.data?.checkout ?? null;
+  };
+
+  const deleteLines = async (
+    lineIds: string[],
+  ): Promise<{ ok: true; checkout: CheckoutDetailsFragment } | { ok: false; error: string }> => {
+    const del = await client.mutation(CheckoutLinesDeleteDocument, { checkoutId, lineIds }).toPromise();
+
+    if (del.error) {
+      return { ok: false, error: del.error.message };
+    }
+    const updated = del.data?.checkoutLinesDelete?.checkout;
+
+    return updated
+      ? { ok: true, checkout: updated }
+      : { ok: false, error: describeErrors(del.data?.checkoutLinesDelete?.errors, "Deleting fee line failed") };
+  };
+
+  // One consistent snapshot of the total and the fee lines it includes.
+  const snapshot = await client.query(PaymentFeeCheckoutDocument, { id: checkoutId }).toPromise();
+
+  if (snapshot.error) {
     return res.status(400).json({
-      errorMessage: `Could not get checkout details. Error: ${checkoutQuery.error.message}`,
+      errorMessage: `Could not get checkout details. Error: ${snapshot.error.message}`,
     });
   }
 
-  const checkout = checkoutQuery.data?.checkout;
+  const checkout = snapshot.data?.checkout;
+
   if (!checkout) {
     return res.status(404).json({ errorMessage: "Checkout not found" });
   }
 
-  // Try to locate an existing fee line by metadata
-  const existingFeeLine = checkout.lines.find(
-    (line) => line.metadata?.some((m) => m.key === PAYMENT_FEE_METADATA_KEY),
-  );
+  const existingFeeLines = checkout.lines.filter(isPaymentFeeLine);
 
-  // If apply=false, remove fee line if exists and return
-  if (!apply) {
-    if (existingFeeLine) {
-      const del = await client
-        .mutation(CheckoutLinesDeleteDocument, {
-          checkoutId: checkout.id,
-          lineIds: [existingFeeLine.id],
-        })
-        .toPromise();
+  if (feeConfig === null) {
+    // apply=false: remove every fee line
+    if (existingFeeLines.length === 0) {
+      const current = await fetchDetails();
 
-      if (del.error) {
-        return res.status(400).json({
-          errorMessage: `Could not delete fee line. Error: ${del.error.message}`,
-        });
-      }
-
-      const updated = del.data?.checkoutLinesDelete?.checkout;
-      if (!updated) {
-        return res.status(400).json({ errorMessage: "Deleting fee line failed" });
-      }
-      return res.status(200).json({ checkout: updated });
+      return current
+        ? res.status(200).json({ checkout: current })
+        : res.status(404).json({ errorMessage: "Checkout not found" });
     }
 
-    // No fee to remove, return current checkout
-    return res.status(200).json({ checkout });
+    const removed = await deleteLines(existingFeeLines.map((line) => line.id));
+
+    if (!removed.ok) {
+      return res.status(400).json({ errorMessage: `Could not delete fee line. Error: ${removed.error}` });
+    }
+
+    return res.status(200).json({ checkout: removed.checkout });
   }
 
-  // From here, apply=true -> add or update fee line
-  if (amount === undefined || amount === null) {
-    return res.status(400).json({ errorMessage: "amount has not been provided" });
+  // apply=true
+  const { ratePercent: ratePercentServer, variantId: feeVariantId } = feeConfig;
+  const currency = checkout.totalPrice.gross.currency;
+  const existingFeeCents = existingFeeLines.reduce((sum, line) => sum + toCents(line.totalPrice.gross.amount), 0);
+  const feeExclusiveTotalCents = toCents(checkout.totalPrice.gross.amount) - existingFeeCents;
+
+  if (feeExclusiveTotalCents <= 0) {
+    return res.status(400).json({
+      errorMessage: "Cannot apply a payment fee: the checkout has no payable total",
+    });
   }
 
-  // Normalize price to string with 2 decimals as Saleor expects PositiveDecimal
-  const normalizedAmount = typeof amount === "number" ? amount.toFixed(2) : amount;
+  const feeCents = computeFeeCents(feeExclusiveTotalCents, ratePercentServer);
+  const markerValue = feeMetadataValue(ratePercentServer);
 
-  if (existingFeeLine) {
-    // Update the existing line price using CheckoutLinesUpdate
-    // Note: Our project includes CheckoutLinesUpdateDocument in update-line-quantity.ts
-    // To avoid a separate import dependency here, perform delete+add for simplicity and idempotency.
-    const del = await client
-      .mutation(CheckoutLinesDeleteDocument, {
-        checkoutId: checkout.id,
-        lineIds: [existingFeeLine.id],
-      })
-      .toPromise();
+  if (ratePercent !== undefined && ratePercent !== ratePercentServer) {
+    console.warn("[payment-fee] Caller ratePercent differs from PAYMENT_FEE_RATE_PERCENT; charging the server rate", {
+      callerRatePercent: ratePercent,
+      serverRatePercent: ratePercentServer,
+    });
+  }
+  if (amount !== undefined && amount !== null) {
+    const callerAmount = typeof amount === "number" || typeof amount === "string" ? Number(amount) : NaN;
 
-    if (del.error) {
-      return res.status(400).json({
-        errorMessage: `Could not update fee line (delete failed). Error: ${del.error.message}`,
+    if (!Number.isFinite(callerAmount) || toCents(callerAmount) !== feeCents) {
+      console.warn("[payment-fee] Ignoring caller-supplied amount; charging the server-computed fee", {
+        checkout: logRef,
+        callerAmount: Number.isFinite(callerAmount) ? callerAmount : "invalid",
+        serverAmount: centsToDecimalString(feeCents),
+        currency,
       });
     }
   }
 
-  // Add the fee as a new forced line using the configured service variant
+  // Idempotent re-call: the single fee line already carries this exact fee.
+  const [onlyFeeLine] = existingFeeLines;
+
+  if (
+    existingFeeLines.length === 1 &&
+    onlyFeeLine.quantity === 1 &&
+    toCents(onlyFeeLine.totalPrice.gross.amount) === feeCents &&
+    onlyFeeLine.metadata.some((m) => m.key === PAYMENT_FEE_METADATA_KEY && m.value === markerValue)
+  ) {
+    const current = await fetchDetails();
+
+    if (current) {
+      return res.status(200).json({ checkout: current });
+    }
+  }
+
+  // Replace: remove EVERY existing fee line (stale rate, stale amount, or
+  // duplicates from an earlier race), then add exactly one.
+  if (existingFeeLines.length > 0) {
+    const removed = await deleteLines(existingFeeLines.map((line) => line.id));
+
+    if (!removed.ok) {
+      return res.status(400).json({
+        errorMessage: `Could not update fee line (delete failed). Error: ${removed.error}`,
+      });
+    }
+  }
+
   const add = await client
     .mutation(AddLinesToCheckoutDocument, {
-      id: checkout.id,
+      id: checkoutId,
       lines: [
         {
           quantity: 1,
-          variantId: FEE_VARIANT_ID!,
-          price: normalizedAmount,
+          variantId: feeVariantId,
+          price: centsToDecimalString(feeCents),
           forceNewLine: true,
           metadata: [
-            { key: PAYMENT_FEE_METADATA_KEY, value: feeMetadataValue(effectiveRatePercent) },
-            { key: "display_name", value: feeDisplayName(effectiveRatePercent) },
-            ...(currency ? [{ key: "currency", value: String(currency) }] : []),
+            { key: PAYMENT_FEE_METADATA_KEY, value: markerValue },
+            { key: "display_name", value: feeDisplayName(ratePercentServer) },
+            { key: "currency", value: currency },
           ],
         },
       ],
@@ -232,8 +245,37 @@ export default async function handler(
   }
 
   const updatedCheckout = add.data?.checkoutLinesAdd?.checkout;
+
   if (!updatedCheckout) {
-    return res.status(400).json({ errorMessage: "Adding fee line failed" });
+    return res.status(400).json({
+      errorMessage: describeErrors(add.data?.checkoutLinesAdd?.errors, "Adding fee line failed"),
+    });
+  }
+
+  // A concurrent call may have added its own fee line between our read and
+  // our write. Keep the oldest (Saleor orders lines by created_at, id) and
+  // drop the rest, so the checkout always converges to exactly one fee line.
+  const duplicateFeeLines = updatedCheckout.lines.filter(isPaymentFeeLine).slice(1);
+
+  if (duplicateFeeLines.length > 0) {
+    console.warn("[payment-fee] Concurrent fee lines detected; removing duplicates", {
+      checkout: logRef,
+      duplicates: duplicateFeeLines.length,
+    });
+    const deduped = await deleteLines(duplicateFeeLines.map((line) => line.id));
+
+    if (deduped.ok) {
+      return res.status(200).json({ checkout: deduped.checkout });
+    }
+
+    // The other request may have removed them already — accept the state if it converged.
+    const current = await fetchDetails();
+
+    if (current && current.lines.filter(isPaymentFeeLine).length === 1) {
+      return res.status(200).json({ checkout: current });
+    }
+
+    return res.status(409).json({ errorMessage: "Payment fee lines changed concurrently; please retry" });
   }
 
   return res.status(200).json({ checkout: updatedCheckout });

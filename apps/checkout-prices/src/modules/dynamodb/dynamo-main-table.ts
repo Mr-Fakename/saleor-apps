@@ -5,6 +5,7 @@ import {
   createDynamoDBClient,
   createDynamoDBDocumentClient,
 } from "./dynamodb-client";
+import { resolveMainTableName } from "./main-table-name";
 
 type PartitionKey = { name: "PK"; type: "string" };
 type SortKey = { name: "SK"; type: "string" };
@@ -63,9 +64,7 @@ export class DynamoMainTable extends Table<PartitionKey, SortKey> {
   }
 }
 
-const tableName = process.env.DYNAMODB_MAIN_TABLE_NAME || process.env.CHECKOUT_PRICES_DYNAMODB_TABLE;
-
-if (!tableName) {
+if (!process.env.DYNAMODB_MAIN_TABLE_NAME && !process.env.CHECKOUT_PRICES_DYNAMODB_TABLE) {
   console.warn("[DynamoDB] DYNAMODB_MAIN_TABLE_NAME or CHECKOUT_PRICES_DYNAMODB_TABLE is not set - DynamoDB features will not be available");
 }
 
@@ -74,5 +73,6 @@ const documentClient = createDynamoDBDocumentClient(client);
 
 export const dynamoMainTable = DynamoMainTable.create({
   documentClient: documentClient,
-  tableName: tableName || "checkout-prices-main-table", // Fallback for safety
+  // Falls back to DEFAULT_MAIN_TABLE_NAME; shared with instrumentations/dynamodb-init.ts
+  tableName: resolveMainTableName(),
 });

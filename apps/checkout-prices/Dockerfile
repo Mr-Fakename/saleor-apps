@@ -66,15 +66,14 @@ COPY --from=builder --chown=nextjs:nodejs /app/apps/checkout-prices/.next/standa
 COPY --from=builder --chown=nextjs:nodejs /app/apps/checkout-prices/.next/static ./apps/checkout-prices/.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/apps/checkout-prices/public ./apps/checkout-prices/public
 
-# Copy initialization script
-COPY --from=builder --chown=nextjs:nodejs /app/apps/checkout-prices/scripts/init-dynamodb.sh ./scripts/init-dynamodb.sh
-
 # Create directory for auth data persistence
 RUN mkdir -p /app/data && chown -R nextjs:nodejs /app/data
 
-# Make init script executable
-RUN chmod +x ./scripts/init-dynamodb.sh && \
-    sed -i 's/\r$//' ./scripts/init-dynamodb.sh
+# DynamoDB table creation runs inside the server at startup
+# (src/instrumentation.ts); it replaced the public /api/setup-db route and the
+# init-dynamodb.sh script that called it. On by default for this image, as the
+# script was; set INIT_DYNAMODB_ON_STARTUP=false to skip.
+ENV INIT_DYNAMODB_ON_STARTUP=true
 
 # Create startup script BEFORE switching to nextjs user
 RUN printf '#!/bin/sh\n\
@@ -82,9 +81,6 @@ echo "[STARTUP] Starting Next.js server..."\n\
 HOSTNAME=0.0.0.0 node apps/checkout-prices/server.js &\n\
 SERVER_PID=$!\n\
 echo "[STARTUP] Server PID: $SERVER_PID"\n\
-\n\
-# Run DynamoDB initialization in background\n\
-./scripts/init-dynamodb.sh &\n\
 \n\
 # Wait for the server process\n\
 wait $SERVER_PID\n' > /app/start.sh && \
