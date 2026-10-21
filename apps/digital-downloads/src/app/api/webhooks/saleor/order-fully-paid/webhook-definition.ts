@@ -1,19 +1,26 @@
 import { SaleorAsyncWebhook } from "@saleor/app-sdk/handlers/next-app-router";
+import { WebhookError } from "@saleor/app-sdk/handlers/shared";
+import { SALEOR_API_URL_HEADER } from "@saleor/app-sdk/headers";
 
-import { verifySignatureFlexible } from "@/app/api/webhooks/saleor/verify-signature-flexible";
-import {
-  OrderFullyPaidDocument,
-  OrderFullyPaidSubscription,
-  OrderFullyPaid,
-} from "@/generated/graphql";
-import { saleorApp } from "@/lib/saleor-app";
+import { OrderFullyPaid, OrderFullyPaidDocument } from "@/generated/graphql";
 import { createLogger } from "@/lib/logger";
+import { saleorApp } from "@/lib/saleor-app";
 
 const logger = createLogger("orderFullyPaidWebhookDefinition");
 
 // Use the generated OrderFullyPaid type directly
 export type OrderFullyPaidEventFragment = OrderFullyPaid;
 
+/**
+ * Signature verification is the SDK default (`verifySignatureWithJwks` from
+ * `@saleor/app-sdk/auth`): the detached JWS in `saleor-signature` is checked against the JWKS
+ * stored for the registered Saleor instance, refreshed once from that instance's
+ * `/.well-known/jwks.json` on failure, and the webhook is rejected (401) if it still fails.
+ *
+ * Do NOT pass a custom `verifySignatureFn` that swallows errors: the handler trusts the payload
+ * (order lines, buyer email) to mint download tokens, so a forged webhook means free downloads
+ * emailed to any address (regression NR-03).
+ */
 export const orderFullyPaidWebhookDefinition = new SaleorAsyncWebhook<OrderFullyPaidEventFragment>({
   apl: saleorApp.apl,
   event: "ORDER_FULLY_PAID",
@@ -21,29 +28,12 @@ export const orderFullyPaidWebhookDefinition = new SaleorAsyncWebhook<OrderFully
   isActive: true,
   query: OrderFullyPaidDocument,
   webhookPath: "api/webhooks/saleor/order-fully-paid",
-  verifySignatureFn: (jwks, signature, rawBody) => {
-    logger.debug("ORDER_FULLY_PAID webhook signature verification started", {
-      hasJwks: !!jwks,
-      jwksLength: jwks?.length,
-      hasSignature: !!signature,
-      signatureLength: signature?.length,
-      rawBodyLength: rawBody?.length,
+  onError(error, request) {
+    // Logging only: the SDK still sends its own error response (401 for signature failures).
+    logger.warn("ORDER_FULLY_PAID webhook rejected before reaching the handler", {
+      errorType: error instanceof WebhookError ? error.errorType : "UNEXPECTED",
+      error: error.message,
+      saleorApiUrl: request.headers.get(SALEOR_API_URL_HEADER),
     });
-
-    // Use flexible verifier that handles HTTP/HTTPS URL differences in aud claim
-    const promise = verifySignatureFlexible(jwks, signature, rawBody);
-
-    promise
-      .then(() => {
-        logger.debug("ORDER_FULLY_PAID webhook signature verification succeeded");
-      })
-      .catch((error) => {
-        logger.error("ORDER_FULLY_PAID webhook signature verification failed", {
-          error: error instanceof Error ? error.message : String(error),
-          errorStack: error instanceof Error ? error.stack : undefined,
-        });
-      });
-
-    return promise;
   },
 });
