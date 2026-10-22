@@ -382,7 +382,8 @@ export default async function handler(
       ids: [baseVariantId, ...selected.map(({ variantId }) => variantId)],
       channel: DEFAULT_CHANNEL,
       tr: checkoutLanguage !== null,
-      ...(checkoutLanguage !== null ? { lang: checkoutLanguage } : {}),
+      // always present: Saleor rejects an omitted non-null variable; unused while tr is false
+      lang: checkoutLanguage ?? "EN",
     })
     .toPromise();
 

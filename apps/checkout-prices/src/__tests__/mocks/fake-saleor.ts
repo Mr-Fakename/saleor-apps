@@ -281,6 +281,14 @@ export class FakeSaleor {
         };
       }
       case "CableNames": {
+        // Saleor (graphql-core 2) rejects a non-null variable that is not provided, even with a default (prod 2026-10-22)
+        if (variables.lang === undefined || variables.lang === null) {
+          return {
+            error: {
+              message: 'Argument "languageCode" of required type LanguageCodeEnum!" provided the variable "$lang" which was not provided',
+            },
+          };
+        }
         // Saleor rejects the WHOLE query when one id is malformed
         const ids = Array.isArray(variables.ids) ? variables.ids.map(String) : [];
 

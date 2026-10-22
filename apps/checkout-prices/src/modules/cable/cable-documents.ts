@@ -153,8 +153,8 @@ export type CableNamesQuery = {
 export type CableNamesQueryVariables = {
   ids: string[];
   channel: string;
-  /** only read when `tr` is true */
-  lang?: string;
+  /** ALWAYS sent (Saleor rejects an omitted non-null variable); only read when `tr` is true, so any valid code works then */
+  lang: string;
   tr: boolean;
 };
 
@@ -166,7 +166,7 @@ export type CableNamesQueryVariables = {
  * query, so callers treat an error as "names unavailable" and fail closed.
  */
 export const CableNamesDocument: TypedDocumentNode<CableNamesQuery, CableNamesQueryVariables> = parse(`
-  query CableNames($ids: [ID!]!, $channel: String!, $lang: LanguageCodeEnum! = EN, $tr: Boolean!) {
+  query CableNames($ids: [ID!]!, $channel: String!, $lang: LanguageCodeEnum!, $tr: Boolean!) {
     productVariants(first: 100, ids: $ids, channel: $channel) {
       edges {
         node {

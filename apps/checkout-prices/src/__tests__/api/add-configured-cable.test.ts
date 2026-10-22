@@ -710,6 +710,19 @@ describe("POST /api/add-configured-cable", () => {
       expect(lookup?.variables).toMatchObject({ lang: "EN", tr: true, channel: "default-channel" });
     });
 
+    it("NR-39: adds a cable without a checkoutId (new checkout, no language), resolves the names and always sends lang", async () => {
+      const res = await callCable({ baseVariantId: BASE, configuration: validConfiguration() });
+
+      expect(res._status).toBe(200);
+      const lookup = fakeSaleor.calls.find((c) => c.name === "CableNames");
+
+      expect(lookup?.variables.lang).toBeTypeOf("string");
+      expect(lookup?.variables.tr).toBe(false);
+      const lines = Array.from(fakeSaleor.checkouts.values()).flatMap((c) => c.lines);
+
+      expect(recordOf(lines[lines.length - 1].metadata)["connecteur_1_name"]).toBe(SALEOR_NAMES.connecteur1Name);
+    });
+
     it("keeps the base names for a checkout in a language without translations", async () => {
       fakeSaleor.variants.get(CONNECTOR_A)!.productTranslations = { EN: "Jack A (EN)" };
       const fr = fakeSaleor.addCheckout({ languageCode: "FR" }).id;
