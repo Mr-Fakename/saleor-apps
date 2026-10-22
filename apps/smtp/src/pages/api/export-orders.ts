@@ -3,6 +3,10 @@ import nodemailer from "nodemailer";
 import { Pool } from "pg";
 
 import { createLogger } from "../../logger";
+import {
+  addCableVerificationColumn,
+  parseCableVerificationCutoff,
+} from "../../modules/order-export/verify-cable-line";
 
 const logger = createLogger("api/export-orders");
 
@@ -18,6 +22,11 @@ const logger = createLogger("api/export-orders");
  * The SQL below is the canonical copy. `scripts/weekly-order-export.sh` keeps a
  * standalone duplicate for the psql-in-db-container fallback — keep them in sync.
  * Column order + the `AS` aliases become the CSV header row (matches `psql --csv`).
+ *
+ * "Câble vérifié" (verify-cable-line.ts): "oui" means the line's public metadata
+ * matches the record the checkout-prices app wrote privately; "non (avant
+ * vérification)" = no record on an order created before CABLE_VERIFICATION_CUTOFF
+ * (optional env; unset = plain "non"). $2 = CABLE_PRODUCT_SLUG (default cable-custom).
  */
 const ORDER_EXPORT_SQL = `
 SELECT
@@ -69,6 +78,12 @@ SELECT
   CASE WHEN ol.metadata->>'configurator_type' = 'cable'
     THEN 'Oui' ELSE ''
   END                                             AS "Cable personnalise",
+  -- Raw metadata for the "Câble vérifié" column, computed in JS (verify-cable-line.ts);
+  -- the __ columns are dropped before the CSV is written.
+  ol.metadata                                     AS "__metadata",
+  ol.private_metadata                             AS "__private_metadata",
+  COALESCE(pp.slug = $2::text, false)             AS "__is_cable_product",
+  o.created_at                                    AS "__created_at",
   COALESCE(ol.metadata->>'connecteur_1_name', '') AS "Cable - Connecteur 1",
   COALESCE(ol.metadata->>'connecteur_2_name', '') AS "Cable - Connecteur 2",
   COALESCE(ol.metadata->>'connecteur_3_name', '') AS "Cable - Connecteur 3",
@@ -182,6 +197,8 @@ JOIN order_orderline ol ON ol.order_id = o.id
 LEFT JOIN account_address ba ON ba.id = o.billing_address_id
 LEFT JOIN account_address sa ON sa.id = o.shipping_address_id
 LEFT JOIN account_user u ON u.id = o.user_id
+LEFT JOIN product_productvariant pv ON pv.id = ol.variant_id
+LEFT JOIN product_product pp ON pp.id = pv.product_id
 LEFT JOIN LATERAL (
   SELECT payment_method_type, payment_method_name, psp_reference, name
   FROM payment_transactionitem pti
@@ -339,7 +356,7 @@ const handler: NextApiHandler = async (req, res) => {
   try {
     const result = await getPool().query<Record<string, unknown>>({
       text: ORDER_EXPORT_SQL,
-      values: [days],
+      values: [days, process.env.CABLE_PRODUCT_SLUG?.trim() || "cable-custom"],
     });
 
     const lineCount = result.rows.length;
@@ -351,8 +368,12 @@ const handler: NextApiHandler = async (req, res) => {
       return res.status(200).json({ success: true, sent: false, reason: "no-orders", lines: 0 });
     }
 
-    const fields = result.fields.map(field => field.name);
-    const csv = toCsv(fields, result.rows);
+    const { fields, rows } = addCableVerificationColumn(
+      result.fields.map(field => field.name),
+      result.rows,
+      { cutoff: parseCableVerificationCutoff(process.env.CABLE_VERIFICATION_CUTOFF) },
+    );
+    const csv = toCsv(fields, rows);
     const cableLines = result.rows.filter(row => row["Cable personnalise"] === "Oui").length;
 
     const dateStr = new Date().toISOString().slice(0, 10);
