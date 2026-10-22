@@ -1,1 +1,8 @@
 **/generated/ linguist-generated=true
+
+# Image build inputs must keep LF on every checkout (core.autocrlf=true on Windows):
+# a CRLF Dockerfile bakes `#!/bin/bash\r` into the heredoc start script and the
+# container cannot start ("/app/start-app.sh: No such file or directory").
+# Prod incident 2026-10-22: checkout-app:sha-40e41378 built from a fresh worktree.
+Dockerfile text eol=lf
+*.sh text eol=lf
