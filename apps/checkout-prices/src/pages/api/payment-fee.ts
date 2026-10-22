@@ -4,6 +4,7 @@ import {
   AddLinesToCheckoutDocument,
   CheckoutDetailsFragment,
   CheckoutLinesDeleteDocument,
+  CheckoutLinesUpdateDocument,
   GetCheckoutDetailsDocument,
 } from "../../../generated/graphql";
 import { createAppGraphQLClient } from "../../lib/app-graphql-client";
@@ -29,6 +30,10 @@ import { PaymentFeeCheckoutDocument } from "../../modules/payment-fee/payment-fe
 // fee-exclusive total as Saleor reports it — see modules/payment-fee.
 // Caller-supplied `amount`/`ratePercent`/`currency` are accepted for
 // compatibility with existing storefront builds but never charged.
+//
+// A single existing fee line is corrected IN PLACE (one checkoutLinesUpdate),
+// never deleted and re-added: in between, a concurrent PaymentIntent resync
+// could read the checkout without its fee (payments review 2026-10-21, A2c).
 //
 // Callers: the storefront browser (StripeCheckoutForm, PaymentRedirectHandler
 // — cross-origin, allowlisted via ALLOWED_ORIGINS) and the storefront server
@@ -191,14 +196,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     }
   }
 
-  // Idempotent re-call: the single fee line already carries this exact fee.
+  const feeLineMetadata = [
+    { key: PAYMENT_FEE_METADATA_KEY, value: markerValue },
+    { key: "display_name", value: feeDisplayName(ratePercentServer) },
+    { key: "currency", value: currency },
+  ];
   const [onlyFeeLine] = existingFeeLines;
+  const singleFeeLine = existingFeeLines.length === 1 && onlyFeeLine.variant.id === feeVariantId ? onlyFeeLine : null;
 
+  // Idempotent re-call: the single fee line already carries this exact fee.
   if (
-    existingFeeLines.length === 1 &&
-    onlyFeeLine.quantity === 1 &&
-    toCents(onlyFeeLine.totalPrice.gross.amount) === feeCents &&
-    onlyFeeLine.metadata.some((m) => m.key === PAYMENT_FEE_METADATA_KEY && m.value === markerValue)
+    singleFeeLine &&
+    singleFeeLine.quantity === 1 &&
+    toCents(singleFeeLine.totalPrice.gross.amount) === feeCents &&
+    singleFeeLine.metadata.some((m) => m.key === PAYMENT_FEE_METADATA_KEY && m.value === markerValue)
   ) {
     const current = await fetchDetails();
 
@@ -207,49 +218,84 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     }
   }
 
-  // Replace: remove EVERY existing fee line (stale rate, stale amount, or
-  // duplicates from an earlier race), then add exactly one.
-  if (existingFeeLines.length > 0) {
-    const removed = await deleteLines(existingFeeLines.map((line) => line.id));
+  let updatedCheckout: CheckoutDetailsFragment;
 
-    if (!removed.ok) {
+  if (singleFeeLine) {
+    // One fee line with a stale price, rate marker or quantity: correct it in
+    // ONE checkoutLinesUpdate (a custom price needs HANDLE_CHECKOUTS, as on
+    // add), so the checkout is never without its fee line. If the line was
+    // deleted meanwhile Saleor reports an error and re-creates nothing.
+    const update = await client
+      .mutation(CheckoutLinesUpdateDocument, {
+        checkoutId,
+        lines: [
+          {
+            lineId: singleFeeLine.id,
+            quantity: 1,
+            price: centsToDecimalString(feeCents),
+            metadata: feeLineMetadata,
+          },
+        ],
+      })
+      .toPromise();
+
+    if (update.error) {
+      return res.status(400).json({ errorMessage: `Could not update fee line. Error: ${update.error.message}` });
+    }
+
+    const updated = update.data?.checkoutLinesUpdate?.checkout;
+
+    if (!updated) {
       return res.status(400).json({
-        errorMessage: `Could not update fee line (delete failed). Error: ${removed.error}`,
+        errorMessage: `Could not update fee line. Error: ${describeErrors(
+          update.data?.checkoutLinesUpdate?.errors,
+          "Updating fee line failed",
+        )}`,
       });
     }
-  }
+    updatedCheckout = updated;
+  } else {
+    // No fee line, duplicates from an earlier race, or a line on another
+    // variant: remove EVERY existing fee line, then add exactly one.
+    if (existingFeeLines.length > 0) {
+      const removed = await deleteLines(existingFeeLines.map((line) => line.id));
 
-  const add = await client
-    .mutation(AddLinesToCheckoutDocument, {
-      id: checkoutId,
-      lines: [
-        {
-          quantity: 1,
-          variantId: feeVariantId,
-          price: centsToDecimalString(feeCents),
-          forceNewLine: true,
-          metadata: [
-            { key: PAYMENT_FEE_METADATA_KEY, value: markerValue },
-            { key: "display_name", value: feeDisplayName(ratePercentServer) },
-            { key: "currency", value: currency },
-          ],
-        },
-      ],
-    })
-    .toPromise();
+      if (!removed.ok) {
+        return res.status(400).json({
+          errorMessage: `Could not update fee line (delete failed). Error: ${removed.error}`,
+        });
+      }
+    }
 
-  if (add.error) {
-    return res.status(400).json({
-      errorMessage: `Could not add fee line. Error: ${add.error.message}`,
-    });
-  }
+    const add = await client
+      .mutation(AddLinesToCheckoutDocument, {
+        id: checkoutId,
+        lines: [
+          {
+            quantity: 1,
+            variantId: feeVariantId,
+            price: centsToDecimalString(feeCents),
+            forceNewLine: true,
+            metadata: feeLineMetadata,
+          },
+        ],
+      })
+      .toPromise();
 
-  const updatedCheckout = add.data?.checkoutLinesAdd?.checkout;
+    if (add.error) {
+      return res.status(400).json({
+        errorMessage: `Could not add fee line. Error: ${add.error.message}`,
+      });
+    }
 
-  if (!updatedCheckout) {
-    return res.status(400).json({
-      errorMessage: describeErrors(add.data?.checkoutLinesAdd?.errors, "Adding fee line failed"),
-    });
+    const added = add.data?.checkoutLinesAdd?.checkout;
+
+    if (!added) {
+      return res.status(400).json({
+        errorMessage: describeErrors(add.data?.checkoutLinesAdd?.errors, "Adding fee line failed"),
+      });
+    }
+    updatedCheckout = added;
   }
 
   // A concurrent call may have added its own fee line between our read and

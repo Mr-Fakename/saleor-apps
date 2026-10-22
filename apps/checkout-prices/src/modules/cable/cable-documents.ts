@@ -82,8 +82,150 @@ export const CableOptionProductsDocument: TypedDocumentNode<
   }
 `);
 
+export type CableLineMarkerMutation = {
+  updatePrivateMetadata?: {
+    errors: Array<{ field?: string | null; message?: string | null; code: string }>;
+  } | null;
+};
+
+export type CableLineMarkerMutationVariables = {
+  /** CheckoutLine global ID */
+  id: string;
+  input: Array<{ key: string; value: string }>;
+};
+
+/** Writes the PRIVATE verification record on a checkout line (modules/cable/cable-line-marker.ts). */
+export const CableLineMarkerDocument: TypedDocumentNode<CableLineMarkerMutation, CableLineMarkerMutationVariables> =
+  parse(`
+    mutation CableLineMarker($id: ID!, $input: [MetadataInput!]!) {
+      updatePrivateMetadata(id: $id, input: $input) {
+        errors {
+          field
+          message
+          code
+        }
+      }
+    }
+  `);
+
+type DirectionAttributeResult = {
+  slug?: string | null;
+  choices?: { edges: Array<{ node: { id: string; name?: string | null } }> } | null;
+} | null;
+
+export type CableDirectionChoicesQuery = { attribute?: DirectionAttributeResult };
+
+export type CableDirectionChoicesQueryVariables = { slug: string };
+
+/** The values of ONE direction attribute (the slug assigned to the base variant; modules/cable/cable-direction.ts). */
+export const CableDirectionChoicesDocument: TypedDocumentNode<
+  CableDirectionChoicesQuery,
+  CableDirectionChoicesQueryVariables
+> = parse(`
+  query CableDirectionChoices($slug: String!) {
+    attribute(slug: $slug) {
+      slug
+      choices(first: 100) {
+        edges {
+          node {
+            id
+            name
+          }
+        }
+      }
+    }
+  }
+`);
+
+export type CableNamesQuery = {
+  productVariants?: {
+    edges: Array<{
+      node: {
+        id: string;
+        name: string;
+        translation?: { name?: string | null } | null;
+        product: { name: string; translation?: { name?: string | null } | null };
+      };
+    }>;
+  } | null;
+};
+
+export type CableNamesQueryVariables = {
+  ids: string[];
+  channel: string;
+  /** only read when `tr` is true */
+  lang?: string;
+  tr: boolean;
+};
+
+/**
+ * Saleor's labels for the base variant and the selected components, in the
+ * checkout's language (the storefront configurator's rule: translation first,
+ * base name as fallback). Without a checkout language `tr` is false and only
+ * the base names are returned. One malformed ID makes Saleor reject the whole
+ * query, so callers treat an error as "names unavailable" and fail closed.
+ */
+export const CableNamesDocument: TypedDocumentNode<CableNamesQuery, CableNamesQueryVariables> = parse(`
+  query CableNames($ids: [ID!]!, $channel: String!, $lang: LanguageCodeEnum! = EN, $tr: Boolean!) {
+    productVariants(first: 100, ids: $ids, channel: $channel) {
+      edges {
+        node {
+          id
+          name
+          translation(languageCode: $lang) @include(if: $tr) {
+            name
+          }
+          product {
+            name
+            translation(languageCode: $lang) @include(if: $tr) {
+              name
+            }
+          }
+        }
+      }
+    }
+  }
+`);
+
+export type CableLineKindQuery = {
+  checkout?: {
+    id: string;
+    lines: Array<{
+      id: string;
+      privateMetadata: Array<{ key: string }>;
+      variant: { id: string; product: { slug: string } };
+    }>;
+  } | null;
+};
+
+export type CableLineKindQueryVariables = { id: string };
+
+/**
+ * What a checkout line IS, from data a shopper cannot write: its product slug
+ * and its private metadata (update-line-quantity, L4).
+ */
+export const CableLineKindDocument: TypedDocumentNode<CableLineKindQuery, CableLineKindQueryVariables> = parse(`
+  query CableLineKind($id: ID!) {
+    checkout(id: $id) {
+      id
+      lines {
+        id
+        privateMetadata {
+          key
+        }
+        variant {
+          id
+          product {
+            slug
+          }
+        }
+      }
+    }
+  }
+`);
+
 export type CableCheckoutChannelQuery = {
-  checkout?: { id: string; channel: { slug: string } } | null;
+  checkout?: { id: string; languageCode: string; channel: { slug: string } } | null;
 };
 
 export type CableCheckoutChannelQueryVariables = { id: string };
@@ -95,6 +237,7 @@ export const CableCheckoutChannelDocument: TypedDocumentNode<
   query CableCheckoutChannel($id: ID!) {
     checkout(id: $id) {
       id
+      languageCode
       channel {
         slug
       }

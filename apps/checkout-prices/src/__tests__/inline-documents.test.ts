@@ -6,6 +6,10 @@ import { describe, expect, it } from "vitest";
 import {
   CableBaseVariantDocument,
   CableCheckoutChannelDocument,
+  CableDirectionChoicesDocument,
+  CableLineKindDocument,
+  CableLineMarkerDocument,
+  CableNamesDocument,
   CableOptionProductsDocument,
 } from "../modules/cable/cable-documents";
 import { PaymentFeeCheckoutDocument } from "../modules/payment-fee/payment-fee-checkout-query";
@@ -22,6 +26,10 @@ const documents: Record<string, DocumentNode> = {
   CableBaseVariant: CableBaseVariantDocument,
   CableOptionProducts: CableOptionProductsDocument,
   CableCheckoutChannel: CableCheckoutChannelDocument,
+  CableDirectionChoices: CableDirectionChoicesDocument,
+  CableLineKind: CableLineKindDocument,
+  CableLineMarker: CableLineMarkerDocument,
+  CableNames: CableNamesDocument,
 };
 
 describe("inline GraphQL documents", () => {

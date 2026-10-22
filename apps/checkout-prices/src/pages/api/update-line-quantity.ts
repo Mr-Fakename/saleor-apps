@@ -14,6 +14,9 @@ import { handleCors } from "../../lib/cors";
 import { getVariantPrice } from "../../lib/get-variant-price";
 import { DEFAULT_CHANNEL, SALEOR_API_URL } from "../../const";
 import { apl } from "../../saleor-app";
+import { readCableProductSlug } from "../../modules/cable/cable-config";
+import { CableLineKindDocument } from "../../modules/cable/cable-documents";
+import { hasCableMarker } from "../../modules/cable/cable-line-marker";
 
 type SuccessfulResponse = {
   checkout: CheckoutDetailsFragment;
@@ -137,10 +140,22 @@ export default async function handler(
 
   const variantId = line.variant.id;
 
-  // Check if this is a configured product (has configurator_type metadata)
-  const isConfiguredProduct = line.metadata?.some(
-    (m) => m.key === "configurator_type"
-  );
+  // Is this a configured cable? Decided from data a shopper cannot write: the
+  // line's product slug and the app's PRIVATE marker. The public
+  // `configurator_type` key is shopper-writable (checkoutLinesUpdate /
+  // updateMetadata) and must never switch off the price handling below (L4).
+  const kindQuery = await client.query(CableLineKindDocument, { id: checkoutId }).toPromise();
+
+  if (kindQuery.error || !kindQuery.data?.checkout) {
+    console.error("Could not determine the line kind", kindQuery.error?.message);
+    return res.status(400).json({ errorMessage: "Could not determine the line kind" });
+  }
+
+  const lineKind = kindQuery.data.checkout.lines.find((l) => l.id === lineId);
+  const isConfiguredProduct =
+    !lineKind ||
+    lineKind.variant.product.slug === readCableProductSlug() ||
+    hasCableMarker(lineKind.privateMetadata);
 
   let price: string | undefined;
 

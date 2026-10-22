@@ -17,6 +17,7 @@ export type PaymentFeeCheckoutQuery = {
     totalPrice: Money;
     lines: Array<{
       id: string;
+      variant: { id: string };
       quantity: number;
       metadata: Array<{ key: string; value: string }>;
       totalPrice: Money;
@@ -39,6 +40,9 @@ export const PaymentFeeCheckoutDocument: TypedDocumentNode<PaymentFeeCheckoutQue
         }
         lines {
           id
+          variant {
+            id
+          }
           quantity
           metadata {
             key

@@ -60,3 +60,11 @@ export function readCableProductSlug(): string {
 
   return raw ? raw : DEFAULT_CABLE_PRODUCT_SLUG;
 }
+
+/**
+ * Candidate slugs of the cable direction attribute, in the storefront's order
+ * (storefront/apps/dess/client.config.ts features.cableConfigurator.attributes
+ * .direction). The first one ASSIGNED TO THE BASE VARIANT picks the allow-list for
+ * `directionCableId` (modules/cable/cable-direction.ts).
+ */
+export const CABLE_DIRECTION_ATTRIBUTE_SLUGS = ["direction-cable", "direction", "cable-direction"] as const;

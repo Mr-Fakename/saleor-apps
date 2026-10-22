@@ -8,7 +8,10 @@ import { CABLE_MAX_QUANTITY, type CableLimits } from "./cable-config";
  * Only IDENTIFIERS, the length and the quantity matter for pricing; they are
  * validated strictly. `totalPrice`/`currency` are the storefront's estimate and
  * are ignored — the app prices from Saleor. Display names are free text that
- * is only copied into line metadata, so they are type/length-checked.
+ * is only copied into line metadata, so they are type/length-checked. They are
+ * NOT trusted: the dashboard resolves every component name live from its ID
+ * (NR-35), and `directionCableName` is ignored — the handler writes Saleor's
+ * name for the allow-listed `directionCableId`.
  */
 
 const MAX_TEXT_LENGTH = 255;

@@ -17,6 +17,8 @@ export interface FakeLine {
   quantity: number;
   unitPrice: number;
   metadata: Metadata;
+  /** writable only by apps with MANAGE_CHECKOUTS / HANDLE_TAXES (updatePrivateMetadata) */
+  privateMetadata: Metadata;
 }
 
 export interface FakeCheckout {
@@ -24,6 +26,8 @@ export interface FakeCheckout {
   channelSlug: string;
   currency: string;
   shipping: number;
+  /** Checkout.languageCode (e.g. "EN"); absent = unset */
+  languageCode?: string;
   lines: FakeLine[];
 }
 
@@ -36,6 +40,17 @@ export interface FakeVariant {
   price: number | null;
   currency: string;
   attributes: Array<{ slug: string; references: string[] }>;
+  /** the `quantityPricing` metafield (JSON string), when the variant has tiers */
+  quantityPricing?: string | null;
+  /** ProductVariantTranslation names by language code */
+  translations?: Record<string, string>;
+  /** ProductTranslation names by language code */
+  productTranslations?: Record<string, string>;
+}
+
+export interface FakeAttribute {
+  slug: string;
+  choices: Array<{ id: string; name: string }>;
 }
 
 export interface FakeProduct {
@@ -82,10 +97,19 @@ export class FakeSaleor {
   checkouts = new Map<string, FakeCheckout>();
   variants = new Map<string, FakeVariant>();
   products = new Map<string, FakeProduct>();
+  attributes = new Map<string, FakeAttribute>();
   /** every executed operation, in order */
   calls: Array<{ name: string; variables: Vars }> = [];
   /** test hook: runs before checkoutLinesAdd applies its lines */
   beforeLinesAdd: ((checkout: FakeCheckout) => void) | null = null;
+  /** test hook: runs before checkoutLinesUpdate applies its changes */
+  beforeLinesUpdate: ((checkout: FakeCheckout) => void) | null = null;
+  /** test hook: operation names that fail with a transport error */
+  failingOperations = new Set<string>();
+  /** test hook: operation names that fail ONCE with a transport error, then work */
+  failingOperationsOnce = new Set<string>();
+  /** test hook: variant ids productVariants does not return (deleted / unpublished) */
+  hiddenFromNames = new Set<string>();
   private lineCounter = 0;
 
   readonly client = {
@@ -101,8 +125,17 @@ export class FakeSaleor {
     this.checkouts.clear();
     this.variants.clear();
     this.products.clear();
+    this.attributes.clear();
     this.calls = [];
     this.beforeLinesAdd = null;
+    this.beforeLinesUpdate = null;
+    this.failingOperations.clear();
+    this.failingOperationsOnce.clear();
+    this.hiddenFromNames.clear();
+  }
+
+  addAttribute(attribute: FakeAttribute) {
+    this.attributes.set(attribute.slug, attribute);
   }
 
   addVariant(variant: FakeVariant) {
@@ -119,6 +152,7 @@ export class FakeSaleor {
       channelSlug: partial.channelSlug ?? "default-channel",
       currency: partial.currency ?? "EUR",
       shipping: partial.shipping ?? 0,
+      languageCode: partial.languageCode,
       lines: partial.lines ?? [],
     };
 
@@ -136,11 +170,18 @@ export class FakeSaleor {
       quantity,
       unitPrice,
       metadata,
+      privateMetadata: [],
     };
   }
 
   mutationNames(): string[] {
-    const mutations = new Set(["AddLinesToCheckout", "CheckoutLinesDelete", "CreateExampleCheckout", "CheckoutLinesUpdate"]);
+    const mutations = new Set([
+      "AddLinesToCheckout",
+      "CheckoutLinesDelete",
+      "CreateExampleCheckout",
+      "CheckoutLinesUpdate",
+      "CableLineMarker",
+    ]);
 
     return this.calls.map((c) => c.name).filter((name) => mutations.has(name));
   }
@@ -149,6 +190,14 @@ export class FakeSaleor {
     const name = operationName(doc);
 
     this.calls.push({ name, variables });
+
+    if (this.failingOperationsOnce.delete(name)) {
+      return { error: { message: `[Network] ${name} failed once` } };
+    }
+
+    if (this.failingOperations.has(name)) {
+      return { error: { message: `[Network] ${name} failed` } };
+    }
 
     switch (name) {
       case "GetCheckoutDetails": {
@@ -167,6 +216,7 @@ export class FakeSaleor {
                   totalPrice: money(this.total(checkout), checkout.currency),
                   lines: checkout.lines.map((line) => ({
                     id: line.id,
+                    variant: { id: line.variantId },
                     quantity: line.quantity,
                     metadata: line.metadata,
                     totalPrice: money(line.unitPrice * line.quantity, checkout.currency),
@@ -180,7 +230,15 @@ export class FakeSaleor {
         const checkout = this.checkouts.get(String(variables.id));
 
         return {
-          data: { checkout: checkout ? { id: checkout.id, channel: { slug: checkout.channelSlug } } : null },
+          data: {
+            checkout: checkout
+              ? {
+                  id: checkout.id,
+                  channel: { slug: checkout.channelSlug },
+                  languageCode: checkout.languageCode ?? "EN",
+                }
+              : null,
+          },
         };
       }
       case "GetVariantDetails": {
@@ -202,6 +260,63 @@ export class FakeSaleor {
                   attributes: variant.attributes.map((attr) => ({
                     attribute: { slug: attr.slug },
                     values: attr.references.map((reference) => ({ reference })),
+                  })),
+                }
+              : null,
+          },
+        };
+      }
+      case "CableDirectionChoices": {
+        const attribute = this.attributes.get(String(variables.slug));
+
+        return {
+          data: {
+            attribute: attribute
+              ? {
+                  slug: attribute.slug,
+                  choices: { edges: attribute.choices.map((choice) => ({ node: choice })) },
+                }
+              : null,
+          },
+        };
+      }
+      case "CableNames": {
+        // Saleor rejects the WHOLE query when one id is malformed
+        const ids = Array.isArray(variables.ids) ? variables.ids.map(String) : [];
+
+        if (ids.some((id) => !/^[A-Za-z0-9+/]+={0,2}$/.test(id) || !Buffer.from(id, "base64").toString("utf8").startsWith("ProductVariant:"))) {
+          return { error: { message: "[GraphQL] Invalid ID" } };
+        }
+        const lang = variables.tr ? String(variables.lang) : null;
+        const edges = ids
+          .map((id) => this.variants.get(id))
+          .filter((v): v is FakeVariant => !!v && !this.hiddenFromNames.has(v.id))
+          .map((v) => ({
+            node: {
+              id: v.id,
+              name: v.name,
+              translation: lang && v.translations?.[lang] ? { name: v.translations[lang] } : null,
+              product: {
+                name: v.productName,
+                translation: lang && v.productTranslations?.[lang] ? { name: v.productTranslations[lang] } : null,
+              },
+            },
+          }));
+
+        return { data: { productVariants: { edges } } };
+      }
+      case "CableLineKind": {
+        const checkout = this.checkouts.get(String(variables.id));
+
+        return {
+          data: {
+            checkout: checkout
+              ? {
+                  id: checkout.id,
+                  lines: checkout.lines.map((line) => ({
+                    id: line.id,
+                    privateMetadata: line.privateMetadata,
+                    variant: { id: line.variantId, product: { slug: this.variants.get(line.variantId)?.productSlug ?? "" } },
                   })),
                 }
               : null,
@@ -255,6 +370,80 @@ export class FakeSaleor {
         checkout.lines.push(...added.lines);
 
         return { data: { checkoutLinesAdd: { checkout: this.checkoutDetails(checkout), errors: [] } } };
+      }
+      case "CheckoutLinesUpdate": {
+        const checkout = this.checkouts.get(String(variables.checkoutId));
+
+        if (!checkout) {
+          return { data: { checkoutLinesUpdate: { checkout: null, errors: [{ field: "id", message: "not found", code: "NOT_FOUND" }] } } };
+        }
+        const inputs = Array.isArray(variables.lines) ? (variables.lines as Vars[]) : [];
+        const changes: Array<{ line: FakeLine; input: Vars; price: number | null }> = [];
+
+        // Saleor validates the whole input first; a line deleted meanwhile is an
+        // error, never re-created (checkoutLinesUpdate: raise_error_for_missing_lines).
+        for (const input of inputs) {
+          const line = checkout.lines.find((l) => l.id === String(input.lineId));
+
+          if (!line) {
+            return {
+              data: {
+                checkoutLinesUpdate: {
+                  checkout: null,
+                  errors: [{ field: "lineId", message: "Couldn't resolve to a node", code: "GRAPHQL_ERROR" }],
+                },
+              },
+            };
+          }
+          let price: number | null = null;
+
+          if (input.price !== undefined) {
+            price = parsePositiveDecimal(input.price);
+
+            if (price === null) {
+              return { error: { message: `Expected PositiveDecimal, got ${String(input.price)}` } };
+            }
+          }
+          changes.push({ line, input, price });
+        }
+        this.beforeLinesUpdate?.(checkout);
+        for (const { line, input, price } of changes) {
+          if (typeof input.quantity === "number") {
+            line.quantity = input.quantity;
+          }
+          if (price !== null) {
+            line.unitPrice = price;
+          }
+          // "Will add and update keys"
+          for (const item of (input.metadata as Metadata | undefined) ?? []) {
+            line.metadata = [...line.metadata.filter((m) => m.key !== item.key), item];
+          }
+        }
+        checkout.lines = checkout.lines.filter((l) => l.quantity > 0);
+
+        return { data: { checkoutLinesUpdate: { checkout: this.checkoutDetails(checkout), errors: [] } } };
+      }
+      case "CableLineMarker": {
+        // updatePrivateMetadata(id: <CheckoutLine id>, input) — merges keys
+        const id = String(variables.id);
+        const line = Array.from(this.checkouts.values())
+          .flatMap((c) => c.lines)
+          .find((l) => l.id === id);
+
+        if (!line) {
+          return {
+            data: {
+              updatePrivateMetadata: {
+                errors: [{ field: "id", message: `Couldn't resolve to a node: ${id}`, code: "NOT_FOUND" }],
+              },
+            },
+          };
+        }
+        for (const item of (variables.input as Metadata | undefined) ?? []) {
+          line.privateMetadata = [...line.privateMetadata.filter((m) => m.key !== item.key), item];
+        }
+
+        return { data: { updatePrivateMetadata: { errors: [] } } };
       }
       case "CreateExampleCheckout": {
         const input = (variables.input ?? {}) as Vars;
@@ -322,7 +511,7 @@ export class FakeSaleor {
               price: money(variant.price, variant.currency),
               priceUndiscounted: money(variant.price, variant.currency),
             },
-      quantityPricing: null,
+      quantityPricing: variant.quantityPricing ?? null,
     };
   }
 
