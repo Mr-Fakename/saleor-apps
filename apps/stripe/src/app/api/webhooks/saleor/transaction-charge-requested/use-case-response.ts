@@ -1,16 +1,23 @@
-import { SuccessWebhookResponse } from "@/app/api/webhooks/saleor/saleor-webhook-responses";
 import {
+  ErrorWebhookResponse,
+  SuccessWebhookResponse,
+} from "@/app/api/webhooks/saleor/saleor-webhook-responses";
+import {
+  Actions,
   TransactionChargeRequestedSyncFailure,
   TransactionChargeRequestedSyncSuccess,
 } from "@/generated/app-webhooks-types/transaction-charge-requested";
 import { AppContext } from "@/lib/app-context";
 import { BaseError } from "@/lib/errors";
+import { createChargeFailurePspReference } from "@/modules/saleor/transaction-action-failure-psp-reference";
 import { SaleorMoney } from "@/modules/saleor/saleor-money";
 import { generatePaymentIntentStripeDashboardUrl } from "@/modules/stripe/generate-stripe-dashboard-urls";
 import { StripeApiError } from "@/modules/stripe/stripe-api-error";
 import { StripePaymentIntentId } from "@/modules/stripe/stripe-payment-intent-id";
 import { ChargeFailureResult } from "@/modules/transaction-result/failure-result";
 import { ChargeSuccessResult } from "@/modules/transaction-result/success-result";
+
+import { ChargeRefusal, getChargeRefusalMerchantMessage } from "./charge-refusal-errors";
 
 class Success extends SuccessWebhookResponse {
   readonly transactionResult: ChargeSuccessResult;
@@ -34,6 +41,11 @@ class Success extends SuccessWebhookResponse {
       throw new BaseError("Stripe environment is not set. Ensure AppContext is set earlier");
     }
 
+    /*
+     * Under the PaymentIntent id, with amount_received: the same event the Stripe webhook
+     * (payment_intent.succeeded) reports, so whichever comes second is a duplicate that Saleor
+     * keeps once (payment/utils.py deduplicate_event; transactionEventReport alreadyProcessed).
+     */
     const typeSafeResponse: TransactionChargeRequestedSyncSuccess = {
       result: this.transactionResult.result,
       amount: this.saleorMoney.amount,
@@ -52,19 +64,30 @@ class Success extends SuccessWebhookResponse {
 
 class Failure extends SuccessWebhookResponse {
   readonly transactionResult: ChargeFailureResult;
-  readonly error: StripeApiError;
+  readonly error: StripeApiError | ChargeRefusal;
   readonly stripePaymentIntentId: StripePaymentIntentId;
+  /**
+   * The transaction's available actions after this failure; null leaves Saleor's as they are
+   * (Saleor replaces them only when the answer has `actions`, payment/utils.py
+   * create_transaction_event_from_request_and_webhook_response).
+   */
+  readonly actions: Actions;
+  /** Unique to this failure: see createChargeFailurePspReference. */
+  readonly pspReference: string;
 
   constructor(args: {
-    error: StripeApiError;
+    error: StripeApiError | ChargeRefusal;
     transactionResult: ChargeFailureResult;
     stripePaymentIntentId: StripePaymentIntentId;
+    actions: Actions;
     appContext: AppContext;
   }) {
     super(args.appContext);
     this.error = args.error;
     this.transactionResult = args.transactionResult;
     this.stripePaymentIntentId = args.stripePaymentIntentId;
+    this.actions = args.actions;
+    this.pspReference = createChargeFailurePspReference();
   }
 
   getResponse(): Response {
@@ -72,11 +95,19 @@ class Failure extends SuccessWebhookResponse {
       throw new BaseError("Stripe environment is not set. Ensure AppContext is set earlier");
     }
 
+    // A refusal says why; a Stripe error keeps the previous message (details in TEST only).
+    const message = getChargeRefusalMerchantMessage(this.error) ?? this.transactionResult.message;
+
+    /*
+     * Never the PaymentIntent id (live bug fixed 2026-10-22): Saleor drops a CHARGE_SUCCESS when
+     * a newer CHARGE_FAILURE has the same pspReference, so a refused second capture of a captured
+     * PaymentIntent took chargedAmount back to 0. See createChargeFailurePspReference.
+     */
     const typeSafeResponse: TransactionChargeRequestedSyncFailure = {
       result: this.transactionResult.result,
-      pspReference: this.stripePaymentIntentId,
-      message: this.messageFormatter.formatMessage(this.transactionResult.message, this.error),
-      actions: this.transactionResult.actions,
+      pspReference: this.pspReference,
+      message: this.messageFormatter.formatMessage(message, this.error),
+      ...(this.actions !== null && { actions: this.actions }),
       externalUrl: generatePaymentIntentStripeDashboardUrl(
         this.stripePaymentIntentId,
         this.appContext.stripeEnv,
@@ -84,6 +115,33 @@ class Failure extends SuccessWebhookResponse {
     };
 
     return Response.json(typeSafeResponse, { status: this.statusCode });
+  }
+}
+
+/**
+ * Stripe gave no answer that says whether it captured (isStripeOutcomeUnknown), or the
+ * PaymentIntent is still processing. A CHARGE_FAILURE would tell staff the capture failed while
+ * it may have happened.
+ *
+ * HTTP 503 instead: Saleor 3.22.74 re-sends the same stored delivery when the app answers >= 500
+ * (webhook/transport/synchronous/transport.py handle_transaction_request_task, retry_backoff 10,
+ * max_retries 5: 10/20/40/80/160 s; webhook/transport/utils.py handle_webhook_retry). The retry
+ * reads the PaymentIntent again: a capture that happened is then replayed as CHARGE_SUCCESS.
+ * After the last retry Saleor records its own CHARGE_FAILURE ("Failed to delivery request.",
+ * include_in_calculations=False: it moves no amount), and the Stripe webhook still reports the
+ * capture if there was one.
+ */
+export class ChargeOutcomeUnknownResponse extends ErrorWebhookResponse {
+  readonly statusCode = 503;
+  readonly message = "Stripe capture outcome unknown, retry the same request";
+
+  getResponse() {
+    return Response.json(
+      {
+        message: this.messageFormatter.formatMessage(this.message, this.error),
+      },
+      { status: this.statusCode },
+    );
   }
 }
 
