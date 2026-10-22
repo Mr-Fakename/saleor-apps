@@ -156,7 +156,7 @@ describe("StripeWebhookManager", () => {
     expect(vi.mocked(stripeSdkMock.webhookEndpoints.create).mock.calls[0][0])
       .toMatchInlineSnapshot(`
         {
-          "api_version": "2025-04-30.basil",
+          "api_version": "2025-10-29.clover",
           "description": "Created by Saleor App Payment Stripe, config name: config name",
           "enabled_events": [
             "payment_intent.amount_capturable_updated",

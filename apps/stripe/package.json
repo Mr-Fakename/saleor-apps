@@ -71,7 +71,7 @@
     "react": "catalog:",
     "react-dom": "catalog:",
     "react-hook-form": "catalog:",
-    "stripe": "18.1.0",
+    "stripe": "19.3.0",
     "urql": "catalog:",
     "usehooks-ts": "catalog:",
     "zod": "catalog:",

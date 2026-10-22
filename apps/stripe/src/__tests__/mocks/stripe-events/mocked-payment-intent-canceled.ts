@@ -36,6 +36,7 @@ export const getMockedPaymentIntentPaymentCanceledEvent = (): Stripe.PaymentInte
         confirmation_method: "automatic",
         customer: null,
         description: null,
+        excluded_payment_method_types: null,
         last_payment_error: null,
         latest_charge: null,
         livemode: false,
