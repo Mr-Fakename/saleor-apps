@@ -5,6 +5,7 @@ import { mockedStripeRefundId } from "@/__tests__/mocks/mocked-stripe-refund-id"
 import { StripeAPIError } from "@/modules/stripe/stripe-api-error";
 import { RefundFailureResult } from "@/modules/transaction-result/refund-result";
 
+import { RefundAlreadyRecordedError, RefundRequestChangedError } from "./refund-refusal-errors";
 import { TransactionRefundRequestedUseCaseResponses } from "./use-case-response";
 
 describe("TransactionRefundRequestedUseCaseResponses", () => {
@@ -53,5 +54,43 @@ describe("TransactionRefundRequestedUseCaseResponses", () => {
         }
       `);
     });
+
+    it.each([
+      {
+        error: new RefundRequestChangedError("key reused"),
+        expected: "amount changed after a possibly-successful attempt; create a new granted refund",
+      },
+      {
+        error: new RefundAlreadyRecordedError("already recorded"),
+        expected: "identical refund within 24 h; use a granted refund",
+      },
+    ])(
+      "tells staff why the app refused the refund, without pspReference ($error.name)",
+      async ({ error, expected }) => {
+        const response = new TransactionRefundRequestedUseCaseResponses.Failure({
+          transactionResult: new RefundFailureResult(),
+          stripePaymentIntentId: mockedStripePaymentIntentId,
+          error,
+          appContext: {
+            stripeEnv: "LIVE",
+          },
+        });
+
+        const body = await response.getResponse().json();
+
+        /*
+         * Review round 3 (P1): a refusal under the PaymentIntent's pspReference is a newer
+         * REFUND_FAILURE of that reference, and Saleor then drops the PaymentIntent's earlier
+         * REFUND_SUCCESS from refundedAmount. No pspReference: Saleor counts it nowhere.
+         */
+        expect(body).toStrictEqual({
+          actions: ["REFUND"],
+          externalUrl: "https://dashboard.stripe.com/payments/pi_TEST_TEST_TEST",
+          message: expect.stringContaining(expected),
+          result: "REFUND_FAILURE",
+        });
+        expect(body).not.toHaveProperty("pspReference");
+      },
+    );
   });
 });

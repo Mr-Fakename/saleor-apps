@@ -24,13 +24,17 @@ export class StripeRefundsApi implements IStripeRefundsApi {
     paymentIntentId: StripePaymentIntentId;
     stripeMoney: StripeMoney;
     metadata?: Stripe.MetadataParam;
+    idempotencyKey: string;
   }): Promise<Result<Stripe.Refund, unknown>> {
     return ResultAsync.fromPromise(
-      this.stripeApiWrapper.refunds.create({
-        payment_intent: args.paymentIntentId,
-        amount: args.stripeMoney.amount,
-        metadata: args.metadata,
-      }),
+      this.stripeApiWrapper.refunds.create(
+        {
+          payment_intent: args.paymentIntentId,
+          amount: args.stripeMoney.amount,
+          metadata: args.metadata,
+        },
+        { idempotencyKey: args.idempotencyKey },
+      ),
       (error) => error,
     );
   }

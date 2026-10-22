@@ -99,7 +99,7 @@ describe("Manifest handler", async () => {
               {
                 "isActive": true,
                 "name": "Stripe Transaction Refund Requested",
-                "query": "subscription TransactionRefundRequested { event { ...TransactionRefundRequestedEvent }}fragment EventMetadata on Event { version recipient { id }}fragment Channel on Channel { id slug}fragment TransactionRefundRequestedEvent on TransactionRefundRequested { ...EventMetadata action { amount currency } transaction { id pspReference checkout { id channel { ...Channel } } order { id channel { ...Channel } } }}",
+                "query": "subscription TransactionRefundRequested { event { ...TransactionRefundRequestedEvent }}fragment EventMetadata on Event { version recipient { id }}fragment Channel on Channel { id slug}fragment TransactionRefundRequestedEvent on TransactionRefundRequested { ...EventMetadata action { amount currency } grantedRefund { id } transaction { id pspReference events { type pspReference externalUrl } checkout { id channel { ...Channel } } order { id channel { ...Channel } } }}",
                 "syncEvents": [
                   "TRANSACTION_REFUND_REQUESTED",
                 ],

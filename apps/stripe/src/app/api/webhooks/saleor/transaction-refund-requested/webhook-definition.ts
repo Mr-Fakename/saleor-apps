@@ -17,6 +17,13 @@ import { logRejectedSaleorWebhook } from "../log-rejected-webhook";
  * Never pass a `verifySignatureFn` that skips or swallows verification: this handler
  * creates Stripe refunds from the payload, so a forged webhook refunds a real payment
  * (regression NR-28).
+ *
+ * The subscription query is registered in each Saleor at install time. Changing
+ * TransactionRefundRequestedDocument (review M3 added `grantedRefund { id }`, review round 2
+ * `transaction { events { type pspReference externalUrl } }`) reaches an installed Saleor
+ * only after its webhook is updated (`pnpm migrate`, or `webhookUpdate` with the new query);
+ * until then the payload keeps the old shape (TransactionRefundRequestedPayload), which the
+ * use case must keep handling.
  */
 export const transactionRefundRequestedWebhookDefinition =
   new SaleorSyncWebhook<TransactionRefundRequestedEventFragment>({

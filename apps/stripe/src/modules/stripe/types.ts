@@ -22,6 +22,11 @@ export interface IStripeRefundsApi {
     paymentIntentId: StripePaymentIntentId;
     stripeMoney: StripeMoney;
     metadata?: AllowedStripeObjectMetadata;
+    /**
+     * Required: a retried request must not refund twice (NR-32).
+     * See createStripeRefundIdempotencyKey.
+     */
+    idempotencyKey: string;
   }): Promise<Result<Stripe.Refund, unknown>>;
 }
 

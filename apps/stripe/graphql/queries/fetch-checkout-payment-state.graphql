@@ -29,6 +29,28 @@ query FetchCheckoutPaymentState($checkoutId: ID!) {
         amount
         currency
       }
+      # Money that moved and went back: after a full refund or a cancel the amounts above
+      # are 0, but Saleor still recorded the payment (see hasRecordedMoneyMovement).
+      refundedAmount {
+        amount
+        currency
+      }
+      refundPendingAmount {
+        amount
+        currency
+      }
+      canceledAmount {
+        amount
+        currency
+      }
+      cancelPendingAmount {
+        amount
+        currency
+      }
+      # A CHARGE_BACK lowers chargedAmount and has no amount field of its own.
+      events {
+        type
+      }
     }
   }
 }

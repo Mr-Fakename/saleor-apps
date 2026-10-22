@@ -38,6 +38,11 @@ const transaction = (
   authorizedAmount: money(0),
   chargePendingAmount: money(0),
   authorizePendingAmount: money(0),
+  refundedAmount: money(0),
+  refundPendingAmount: money(0),
+  canceledAmount: money(0),
+  cancelPendingAmount: money(0),
+  events: [],
   ...overrides,
 });
 
@@ -65,7 +70,9 @@ const paymentIntent = (overrides: Partial<Stripe.PaymentIntent> = {}) =>
     ...overrides,
   }) as Stripe.PaymentIntent;
 
-const request = (overrides: Partial<UpdatePaymentIntentRequest> = {}): UpdatePaymentIntentRequest => ({
+const request = (
+  overrides: Partial<UpdatePaymentIntentRequest> = {},
+): UpdatePaymentIntentRequest => ({
   paymentIntentId: PAYMENT_INTENT_ID,
   amount: 103,
   currency: "EUR",
@@ -99,7 +106,9 @@ const updateMock = () => vi.mocked(mockedStripePaymentIntentsApi.updatePaymentIn
 describe("UpdatePaymentIntentAmountUseCase", () => {
   beforeEach(() => {
     mockApl.get.mockResolvedValue(mockAuthData);
-    vi.mocked(mockedStripePaymentIntentsApi.getPaymentIntent).mockResolvedValue(ok(paymentIntent()));
+    vi.mocked(mockedStripePaymentIntentsApi.getPaymentIntent).mockResolvedValue(
+      ok(paymentIntent()),
+    );
     updateMock().mockImplementation(async (args) =>
       ok(paymentIntent({ amount: args.stripeMoney.amount, currency: args.stripeMoney.currency })),
     );

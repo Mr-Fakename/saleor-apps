@@ -3,12 +3,13 @@ import {
   mockedSaleorChannelId,
   mockedSaleorTransactionId,
 } from "@/__tests__/mocks/constants";
-import { TransactionRefundRequestedEventFragment } from "@/generated/graphql";
+import { TransactionRefundRequestedPayload } from "@/app/api/webhooks/saleor/transaction-refund-requested/refund-requested-payload";
 import { StripePaymentIntentId } from "@/modules/stripe/stripe-payment-intent-id";
 
+/** The payload of a Saleor still on the older subscription (no grantedRefund, no events). */
 export const transactionRefundRequestedFixture = (
   stripePaymentIntentId: StripePaymentIntentId,
-): TransactionRefundRequestedEventFragment => {
+): TransactionRefundRequestedPayload => {
   return {
     recipient: {
       id: mockedSaleorAppId,

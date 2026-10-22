@@ -26,3 +26,24 @@ export const generateRefundStripeDashboardUrl = (
       return `https://dashboard.stripe.com/test/refunds/${encodeURIComponent(refundId)}`;
   }
 };
+
+const REFUND_DASHBOARD_URL = /^https:\/\/dashboard\.stripe\.com\/(?:test\/)?refunds\/([^/?#]+)$/;
+
+/**
+ * The refund ID in a URL built by generateRefundStripeDashboardUrl, or null for any other
+ * URL. A refund the app created is reported to Saleor under the PaymentIntent ID, so this
+ * URL (the event's `externalUrl`) is where Saleor keeps which refund it was.
+ */
+export const parseRefundIdFromStripeDashboardUrl = (url: string): string | null => {
+  const match = REFUND_DASHBOARD_URL.exec(url);
+
+  if (!match) {
+    return null;
+  }
+
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return null;
+  }
+};

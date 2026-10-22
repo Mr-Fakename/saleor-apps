@@ -6,30 +6,45 @@ import {
   BrokenAppResponse,
   MalformedRequestResponse,
 } from "@/app/api/webhooks/saleor/saleor-webhook-responses";
-import { TransactionRefundRequestedEventFragment } from "@/generated/graphql";
 import { appContextContainer } from "@/lib/app-context";
 import { BaseError } from "@/lib/errors";
 import { createLogger } from "@/lib/logger";
 import { loggerContext } from "@/lib/logger-context";
 import { AppConfigRepo } from "@/modules/app-config/repositories/app-config-repo";
 import { SaleorApiUrl } from "@/modules/saleor/saleor-api-url";
+import { saleorGrantedRefundIdFromPayload } from "@/modules/saleor/saleor-granted-refund-id";
 import { SaleorMoney } from "@/modules/saleor/saleor-money";
 import { createSaleorTransactionId } from "@/modules/saleor/saleor-transaction-id";
 import {
   getChannelIdFromRequestedEventPayload,
   getTransactionFromRequestedEventPayload,
 } from "@/modules/saleor/transaction-requested-event-helpers";
-import { mapStripeErrorToApiError } from "@/modules/stripe/stripe-api-error";
+import {
+  mapStripeErrorToApiError,
+  StripeIdempotencyError,
+} from "@/modules/stripe/stripe-api-error";
 import { StripeMoney } from "@/modules/stripe/stripe-money";
 import { createStripePaymentIntentId } from "@/modules/stripe/stripe-payment-intent-id";
 import { createStripeRefundId } from "@/modules/stripe/stripe-refund-id";
+import { createStripeRefundIdempotencyKey } from "@/modules/stripe/stripe-refund-idempotency-key";
 import { IStripeRefundsApiFactory } from "@/modules/stripe/types";
 import { RefundFailureResult } from "@/modules/transaction-result/refund-result";
 
+import { RefundAlreadyRecordedError, RefundRequestChangedError } from "./refund-refusal-errors";
+import {
+  isRefundRecordedAsSuccess,
+  TransactionRefundRequestedPayload,
+} from "./refund-requested-payload";
 import {
   TransactionRefundRequestedUseCaseResponses,
   TransactionRefundRequestedUseCaseResponsesType,
 } from "./use-case-response";
+
+/**
+ * A refund created more than this before the request started was not created by it.
+ * Leaves room for clock skew between this server and Stripe.
+ */
+const REPLAY_DETECTION_MARGIN_SECONDS = 30;
 
 type UseCaseExecuteResult = Result<
   TransactionRefundRequestedUseCaseResponsesType,
@@ -52,7 +67,7 @@ export class TransactionRefundRequestedUseCase {
   async execute(args: {
     appId: string;
     saleorApiUrl: SaleorApiUrl;
-    event: TransactionRefundRequestedEventFragment;
+    event: TransactionRefundRequestedPayload;
   }): Promise<UseCaseExecuteResult> {
     const { appId, saleorApiUrl, event } = args;
 
@@ -163,20 +178,56 @@ export class TransactionRefundRequestedUseCase {
       );
     }
 
+    /*
+     * Only what stays the same for the life of the transaction (review Low 3). The
+     * transaction moves from the checkout to the order when the checkout completes, so
+     * `saleor_source_id`/`saleor_source_type` changed between a refund attempt and its retry,
+     * and Stripe rejects a reused idempotency key with other parameters. Keying on the source
+     * instead would give the retry a new key and refund twice. The refund handler only reads
+     * `saleor_transaction_id`.
+     */
     const refundMetadata = {
-      saleor_source_id: transaction.checkout?.id ? transaction.checkout.id : transaction.order?.id,
-      saleor_source_type: transaction.checkout ? ("Checkout" as const) : ("Order" as const),
       saleor_transaction_id: createSaleorTransactionId(transaction.id),
     };
+
+    const saleorGrantedRefundId = saleorGrantedRefundIdFromPayload(event.grantedRefund);
+
+    /*
+     * Same refund request (Saleor re-send or staff retry) -> same key -> no second refund
+     * (NR-32); another granted refund of the same amount -> another key (review M3).
+     */
+    const idempotencyKey = createStripeRefundIdempotencyKey({
+      saleorTransactionId: refundMetadata.saleor_transaction_id,
+      stripePaymentIntentId,
+      stripeMoney: stripeMoneyResult.value,
+      saleorGrantedRefundId,
+    });
+
+    const requestStartedAtSeconds = Math.floor(Date.now() / 1000);
 
     const createRefundResult = await stripeRefundsApi.createRefund({
       paymentIntentId: stripePaymentIntentId,
       stripeMoney: stripeMoneyResult.value,
       metadata: refundMetadata,
+      idempotencyKey,
     });
 
     if (createRefundResult.isErr()) {
-      const error = mapStripeErrorToApiError(createRefundResult.error);
+      const stripeError = mapStripeErrorToApiError(createRefundResult.error);
+
+      /*
+       * Review round 2 (HIGH): Stripe saw this key with another amount. With the v2 key that
+       * is a granted refund whose amount staff edited after a FAILURE, and that failed
+       * attempt may have refunded the customer. Refused with a message that says so: a new
+       * key here (the old behaviour) refunded twice.
+       */
+      const error =
+        stripeError instanceof StripeIdempotencyError
+          ? new RefundRequestChangedError(
+              "Stripe refused the refund idempotency key reused with other parameters",
+              { cause: stripeError },
+            )
+          : stripeError;
 
       this.logger.error("Stripe refund creation failed", {
         error: error.message,
@@ -194,6 +245,53 @@ export class TransactionRefundRequestedUseCase {
     }
 
     const refund = createRefundResult.value;
+
+    /*
+     * Stripe answers a key it already saw with the refund it created then. That is the
+     * point for a retry, but with the v1 key (no granted refund) it also means a second
+     * refund of the same amount on this transaction within 24 h moves no money.
+     *
+     * Review round 2 (MEDIUM): on that v1 path, when Saleor already recorded the refund as a
+     * success, this request is not a retry still waiting for its answer, and reporting it as
+     * a refund would show money that never moved: refused. A retry whose refund Saleor has
+     * not recorded yet (e.g. the first attempt timed out) still gets the refund Stripe
+     * returns. A Saleor on an older subscription sends no events: replays are then only
+     * logged, as before. With a granted refund (v2 key) a replay is always a retry of that
+     * same granted refund, so it is never refused here: telling staff to "use a granted
+     * refund" would invite them to refund the customer twice.
+     */
+    if (refund.created < requestStartedAtSeconds - REPLAY_DETECTION_MARGIN_SECONDS) {
+      const recordedEvents = event.transaction?.events;
+      const alreadyRecorded =
+        !saleorGrantedRefundId &&
+        !!recordedEvents &&
+        isRefundRecordedAsSuccess(recordedEvents, refund.id);
+
+      this.logger.warn(
+        "Stripe returned an existing refund for this idempotency key: a retry of an earlier request, or (without a granted refund) an identical refund of the same transaction within 24 h (no new money moved)",
+        {
+          stripeRefundId: refund.id,
+          stripePaymentIntentId,
+          refundCreatedAt: refund.created,
+          amount: refund.amount,
+          recordedEventsInPayload: !!recordedEvents,
+          alreadyRecordedInSaleor: alreadyRecorded,
+        },
+      );
+
+      if (alreadyRecorded) {
+        return ok(
+          new TransactionRefundRequestedUseCaseResponses.Failure({
+            transactionResult: new RefundFailureResult(),
+            stripePaymentIntentId,
+            error: new RefundAlreadyRecordedError(
+              `Stripe returned refund ${refund.id}, which Saleor already recorded on the transaction`,
+            ),
+            appContext: appContextContainer.getContextValue(),
+          }),
+        );
+      }
+    }
 
     const saleorMoneyResult = SaleorMoney.createFromStripe({
       amount: refund.amount,

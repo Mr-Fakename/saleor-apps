@@ -9,11 +9,14 @@ import {
 } from "@/app/api/webhooks/saleor/saleor-webhook-responses";
 import { appContextContainer } from "@/lib/app-context";
 import { BaseError } from "@/lib/errors";
+import { createInstrumentedGraphqlClient } from "@/lib/graphql-client";
 import { createLogger } from "@/lib/logger";
 import { loggerContext, withLoggerContext } from "@/lib/logger-context";
 import { setObservabilitySaleorApiUrl } from "@/lib/observability-saleor-api-url";
 import { setObservabilitySourceObjectId } from "@/lib/observability-source-object-id";
+import { saleorApp } from "@/lib/saleor-app";
 import { appConfigRepoImpl } from "@/modules/app-config/repositories/app-config-repo-impl";
+import { CheckoutPaymentStateFetcher } from "@/modules/saleor/checkout-payment-state-fetcher";
 import { createSaleorApiUrl } from "@/modules/saleor/saleor-api-url";
 import { StripePaymentIntentsApiFactory } from "@/modules/stripe/stripe-payment-intents-api-factory";
 import { transactionRecorder } from "@/modules/transactions-recording/repositories/transaction-recorder-impl";
@@ -27,6 +30,16 @@ const useCase = new TransactionInitializeSessionUseCase({
   appConfigRepo: appConfigRepoImpl,
   stripePaymentIntentsApiFactory: new StripePaymentIntentsApiFactory(),
   transactionRecorder: transactionRecorder,
+  // The amount charged is read from the checkout with the app token (NR-31).
+  apl: saleorApp.apl,
+  checkoutPaymentStateFetcherFactory: (authData) =>
+    new CheckoutPaymentStateFetcher(
+      createInstrumentedGraphqlClient({
+        // The APL's https-enforced URL, so the app token never goes out over plain http.
+        saleorApiUrl: authData.saleorApiUrl,
+        token: authData.token,
+      }),
+    ),
 });
 
 const logger = createLogger("TRANSACTION_INITIALIZE_SESSION route");

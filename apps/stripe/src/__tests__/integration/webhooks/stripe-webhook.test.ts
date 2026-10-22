@@ -223,6 +223,7 @@ describe("Stripe Webhook: integration", () => {
     const stripeRefund = await refundApi.createRefund({
       paymentIntentId: stripePaymentIntentId,
       stripeMoney,
+      idempotencyKey: `integration-test-refund-${new RandomId().generate()}`,
     });
 
     const stripeRefundId = createStripeRefundId(stripeRefund._unsafeUnwrap().id);

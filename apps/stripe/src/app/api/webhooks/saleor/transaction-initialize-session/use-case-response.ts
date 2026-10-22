@@ -37,6 +37,10 @@ import {
   TransactionInitializeSessionEventDataError,
   UnsupportedPaymentMethodErrorPublicCode,
 } from "./event-data-parser";
+import {
+  PaymentAmountRefusal,
+  PaymentAmountRefusedErrorPublicCode,
+} from "./payment-amount-errors";
 
 class Success extends SuccessWebhookResponse {
   readonly transactionResult: ChargeActionRequiredResult | AuthorizationActionRequiredResult;
@@ -92,7 +96,10 @@ class Success extends SuccessWebhookResponse {
 
 class Failure extends SuccessWebhookResponse {
   readonly transactionResult: ChargeFailureResult | AuthorizationFailureResult;
-  readonly error: StripeApiError | TransactionInitializeSessionEventDataError;
+  readonly error:
+    | StripeApiError
+    | TransactionInitializeSessionEventDataError
+    | PaymentAmountRefusal;
 
   private static ResponseDataSchema = createFailureWebhookResponseDataSchema(
     z.array(
@@ -102,6 +109,7 @@ class Failure extends SuccessWebhookResponse {
           z.literal(UnsupportedPaymentMethodErrorPublicCode),
           z.literal(StripeCardErrorPublicCode),
           z.literal(StripeApiErrorPublicCode),
+          z.literal(PaymentAmountRefusedErrorPublicCode),
         ]),
         message: z.string(),
       }),
@@ -110,7 +118,7 @@ class Failure extends SuccessWebhookResponse {
 
   constructor(args: {
     transactionResult: ChargeFailureResult | AuthorizationFailureResult;
-    error: StripeApiError | TransactionInitializeSessionEventDataError;
+    error: StripeApiError | TransactionInitializeSessionEventDataError | PaymentAmountRefusal;
     appContext: AppContext;
   }) {
     super(args.appContext);

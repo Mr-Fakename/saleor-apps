@@ -12,6 +12,8 @@ import { StripePaymentIntentId } from "@/modules/stripe/stripe-payment-intent-id
 import { StripeRefundId } from "@/modules/stripe/stripe-refund-id";
 import { RefundFailureResult } from "@/modules/transaction-result/refund-result";
 
+import { isRefundRefusal, RefundRefusal } from "./refund-refusal-errors";
+
 const logger = createLogger("TransactionRefundRequestedUseCaseResponse");
 
 class Success extends SuccessWebhookResponse {
@@ -54,13 +56,13 @@ class Success extends SuccessWebhookResponse {
 
 class Failure extends SuccessWebhookResponse {
   readonly transactionResult: RefundFailureResult;
-  readonly error: StripeApiError;
+  readonly error: StripeApiError | RefundRefusal;
   readonly stripePaymentIntentId: StripePaymentIntentId;
   readonly message: string;
 
   constructor(args: {
     transactionResult: RefundFailureResult;
-    error: StripeApiError;
+    error: StripeApiError | RefundRefusal;
     stripePaymentIntentId: StripePaymentIntentId;
     appContext: AppContext;
   }) {
@@ -79,9 +81,22 @@ class Failure extends SuccessWebhookResponse {
       throw new BaseError("Stripe environment is not set. Ensure AppContext is set earlier");
     }
 
+    /*
+     * Review round 3 (P1): a refusal goes without pspReference. Saleor saves this answer with
+     * include_in_calculations=True and groups refund events by pspReference; under the
+     * PaymentIntent it is a REFUND_FAILURE newer than the PaymentIntent's earlier
+     * REFUND_SUCCESS, which Saleor then drops from refundedAmount (saleor/payment/
+     * transaction_item_calculations.py, `_should_increse_amount`): a real refund vanishes and
+     * chargedAmount grows. Saleor accepts a sync failure without pspReference and counts such
+     * a REFUND_FAILURE in no amount. A failure Stripe reported keeps the PaymentIntent as
+     * before: without a pspReference, Saleor deduplicates it (same type, same pspReference)
+     * against its own failures that have none, e.g. a timed-out attempt, and a retry of the
+     * same amount that fails again would then leave its granted refund PENDING, which Saleor
+     * refuses to retry.
+     */
     const typeSafeResponse: TransactionRefundRequestedSyncFailure = {
       result: this.transactionResult.result,
-      pspReference: this.stripePaymentIntentId,
+      ...(isRefundRefusal(this.error) ? {} : { pspReference: this.stripePaymentIntentId }),
       message: this.messageFormatter.formatMessage(this.message, this.error),
       actions: this.transactionResult.actions,
       externalUrl: generatePaymentIntentStripeDashboardUrl(

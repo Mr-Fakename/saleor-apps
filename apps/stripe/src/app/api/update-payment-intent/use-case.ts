@@ -1,11 +1,14 @@
 import { APL, AuthData } from "@saleor/app-sdk/APL";
 import { err, ok, Result } from "neverthrow";
-import Stripe from "stripe";
 import { z } from "zod";
 
 import { BaseError } from "@/lib/errors";
 import { createLogger } from "@/lib/logger";
 import { AppConfigRepo } from "@/modules/app-config/repositories/app-config-repo";
+import {
+  CheckoutAmountDueErrors,
+  resolveCheckoutAmountDue,
+} from "@/modules/saleor/checkout-amount-due";
 import {
   CheckoutPaymentStateTransaction,
   ICheckoutPaymentStateFetcher,
@@ -17,6 +20,7 @@ import {
 } from "@/modules/stripe/stripe-api-error";
 import { StripeMoney } from "@/modules/stripe/stripe-money";
 import { createStripePaymentIntentId } from "@/modules/stripe/stripe-payment-intent-id";
+import { isPaymentIntentAmountUpdatable } from "@/modules/stripe/stripe-payment-intent-status";
 import { IStripePaymentIntentsApiFactory } from "@/modules/stripe/types";
 
 /**
@@ -120,19 +124,6 @@ export type UpdatePaymentIntentError = InstanceType<
 >;
 
 /**
- * Statuses in which Stripe accepts a new `amount`. Anything else (processing,
- * requires_capture, succeeded, canceled) means money is already moving or done.
- * Stripe stays the final arbiter: a refused update surfaces as InternalError.
- */
-const AMOUNT_UPDATABLE_STATUSES: ReadonlySet<Stripe.PaymentIntent.Status> = new Set<
-  Stripe.PaymentIntent.Status
->([
-  "requires_payment_method",
-  "requires_confirmation",
-  "requires_action",
-]);
-
-/**
  * Re-syncs an existing PaymentIntent to its checkout after the checkout total changed
  * (e.g. the dess PayPal-fee line was added or removed), without a new Saleor transaction.
  *
@@ -144,7 +135,11 @@ const AMOUNT_UPDATABLE_STATUSES: ReadonlySet<Stripe.PaymentIntent.Status> = new 
  * where "other" means not linked to this PaymentIntent (by pspReference or by the
  * PaymentIntent's `saleor_transaction_id` metadata). The request body never sets it.
  * The update is refused when another transaction still has pending money (the amount
- * owed is unknowable until it settles) or when nothing is left to charge.
+ * owed is unknowable until it settles) or when nothing is left to charge. The rule is
+ * shared with transactionInitialize: see resolveCheckoutAmountDue.
+ *
+ * A Stripe refusal of the update (Stripe stays the final arbiter of the status) surfaces
+ * as InternalError.
  */
 export class UpdatePaymentIntentAmountUseCase {
   private logger = createLogger("UpdatePaymentIntentAmountUseCase");
@@ -258,7 +253,7 @@ export class UpdatePaymentIntentAmountUseCase {
       );
     }
 
-    if (!AMOUNT_UPDATABLE_STATUSES.has(paymentIntent.status)) {
+    if (!isPaymentIntentAmountUpdatable(paymentIntent.status)) {
       return err(
         new ConflictError(`PaymentIntent status ${paymentIntent.status} does not allow updates`, {
           props: { publicMessage: "Payment intent can no longer be updated" },
@@ -312,83 +307,64 @@ export class UpdatePaymentIntentAmountUseCase {
     const checkoutTotal = checkout.totalPrice.gross;
     const currency = paymentIntent.currency.toLowerCase();
 
-    if (checkoutTotal.currency.toLowerCase() !== currency) {
-      return err(
-        new ConflictError(
-          `Checkout currency ${checkoutTotal.currency} differs from PaymentIntent currency ${currency}`,
-          { props: { publicMessage: "Checkout currency does not match the payment intent" } },
-        ),
-      );
-    }
-
-    const otherTransactions = transactions.filter((t) => !isLinkedToThisPaymentIntent(t));
-
-    const otherHasPendingMoney = otherTransactions.some(
-      (t) => t.chargePendingAmount.amount > 0 || t.authorizePendingAmount.amount > 0,
-    );
-
-    if (otherHasPendingMoney) {
-      return err(
-        new ConflictError(`Checkout ${checkoutId} has another payment still pending`, {
-          props: { publicMessage: "Checkout has another payment in progress" },
-        }),
-      );
-    }
-
-    const heldByOthers = otherTransactions.flatMap((t) => [t.chargedAmount, t.authorizedAmount]);
-
-    if (heldByOthers.some((m) => m.amount > 0 && m.currency.toLowerCase() !== currency)) {
-      return err(
-        new ConflictError(`Checkout ${checkoutId} holds money in another currency`, {
-          props: { publicMessage: "Checkout has payments in another currency" },
-        }),
-      );
-    }
-
-    /*
-     * Saleor quantizes money to the currency precision, so float error from this
-     * subtraction stays far below half a minor unit and StripeMoney's rounding to the
-     * currency precision removes it.
-     */
-    const amountDue = heldByOthers.reduce((due, m) => due - m.amount, checkoutTotal.amount);
-
-    const stripeMoneyResult = StripeMoney.createFromSaleorAmount({
-      amount: Math.max(amountDue, 0),
+    const amountDueResult = resolveCheckoutAmountDue({
+      checkout,
       currency,
+      isExcluded: isLinkedToThisPaymentIntent,
     });
 
-    if (stripeMoneyResult.isErr()) {
+    if (amountDueResult.isErr()) {
+      const refusal = amountDueResult.error;
+
+      if (refusal instanceof CheckoutAmountDueErrors.CurrencyMismatchError) {
+        return err(
+          new ConflictError(
+            `Checkout currency ${checkoutTotal.currency} differs from PaymentIntent currency ${currency}`,
+            { props: { publicMessage: "Checkout currency does not match the payment intent" } },
+          ),
+        );
+      }
+
+      if (refusal instanceof CheckoutAmountDueErrors.PaymentPendingError) {
+        return err(
+          new ConflictError(`Checkout ${checkoutId} has another payment still pending`, {
+            props: { publicMessage: "Checkout has another payment in progress" },
+          }),
+        );
+      }
+
+      if (refusal instanceof CheckoutAmountDueErrors.ForeignCurrencyHeldError) {
+        return err(
+          new ConflictError(`Checkout ${checkoutId} holds money in another currency`, {
+            props: { publicMessage: "Checkout has payments in another currency" },
+          }),
+        );
+      }
+
+      if (refusal instanceof CheckoutAmountDueErrors.NothingDueError) {
+        return err(
+          new ConflictError(`Nothing left to charge on checkout ${checkoutId}`, {
+            props: { publicMessage: "Nothing left to charge on this checkout" },
+          }),
+        );
+      }
+
       return err(
         new InternalError("Failed to convert the checkout amount for Stripe", {
-          cause: stripeMoneyResult.error,
+          cause: refusal,
         }),
       );
     }
 
-    const stripeMoney = stripeMoneyResult.value;
-
-    if (stripeMoney.amount <= 0) {
-      return err(
-        new ConflictError(`Nothing left to charge on checkout ${checkoutId}`, {
-          props: { publicMessage: "Nothing left to charge on this checkout" },
-        }),
-      );
-    }
+    const { stripeMoney, checkoutTotal: checkoutTotalMoney } = amountDueResult.value;
+    const heldByOthers = amountDueResult.value.heldByCountedTransactions;
 
     const requestedMinor = StripeMoney.createFromSaleorAmount({
       amount: input.amount,
       currency,
     }).map((m) => m.amount);
-    const checkoutTotalMinor = StripeMoney.createFromSaleorAmount({
-      amount: checkoutTotal.amount,
-      currency,
-    }).map((m) => m.amount);
 
-    if (
-      requestedMinor.isErr() ||
-      checkoutTotalMinor.isErr() ||
-      requestedMinor.value !== checkoutTotalMinor.value
-    ) {
+    if (requestedMinor.isErr() || requestedMinor.value !== checkoutTotalMoney.amount) {
       this.logger.warn("Requested amount differs from the Saleor checkout total; using the server amount", {
         paymentIntentId: paymentIntent.id,
         checkoutId,
@@ -436,7 +412,7 @@ export class UpdatePaymentIntentAmountUseCase {
       previousAmount: paymentIntent.amount,
       amount: updated.amount,
       currency: updated.currency,
-      heldByOtherTransactions: heldByOthers.some((m) => m.amount > 0),
+      heldByOtherTransactions: heldByOthers,
     });
 
     return ok({

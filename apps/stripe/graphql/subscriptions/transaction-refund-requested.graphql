@@ -4,9 +4,23 @@ fragment TransactionRefundRequestedEvent on TransactionRefundRequested {
     amount
     currency
   }
+  # Identifies one refund request across retries: keys the Stripe refund (NR-32).
+  # A Saleor still on the previously registered subscription omits it.
+  grantedRefund {
+    id
+  }
   transaction {
     id
     pspReference
+    # What Saleor already recorded: tells a retry from an identical second refund when Stripe
+    # answers with an existing refund (see TransactionRefundRequestedUseCase). A refund the
+    # app created is reported under the PaymentIntent ID, with the refund ID only in
+    # externalUrl (StripeRefundHandler). A Saleor still on an older subscription omits it.
+    events {
+      type
+      pspReference
+      externalUrl
+    }
     checkout {
       id
       channel {
