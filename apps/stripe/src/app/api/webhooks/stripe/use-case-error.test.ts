@@ -16,6 +16,7 @@ import {
   ITransactionEventReporter,
   TransactionEventReportResultResult,
 } from "@/modules/saleor/transaction-event-reporter";
+import { ITransactionEventsFetcher } from "@/modules/saleor/transaction-events-fetcher";
 import { StripeWebhookManager } from "@/modules/stripe/stripe-webhook-manager";
 import { IStripeEventVerify, StripeEventParsingError } from "@/modules/stripe/types";
 import { RecordedTransaction } from "@/modules/transactions-recording/domain/recorded-transaction";
@@ -45,6 +46,10 @@ describe("StripeWebhookUseCase - Error cases", () => {
     reportTransactionEvent: vi.fn(),
   } satisfies ITransactionEventReporter;
 
+  const mockEventsFetcher = {
+    fetchTransactionEvents: vi.fn(),
+  } satisfies ITransactionEventsFetcher;
+
   const mockTransactionRecorder = new MockedTransactionRecorder();
 
   beforeEach(() => {
@@ -57,6 +62,9 @@ describe("StripeWebhookUseCase - Error cases", () => {
       webhookEventVerifyFactory: () => eventVerify,
       transactionEventReporterFactory() {
         return mockEventReporter;
+      },
+      transactionEventsFetcherFactory() {
+        return mockEventsFetcher;
       },
       transactionRecorder: mockTransactionRecorder,
       webhookManager: new StripeWebhookManager(),

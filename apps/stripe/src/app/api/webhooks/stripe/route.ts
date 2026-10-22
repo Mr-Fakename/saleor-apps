@@ -14,6 +14,7 @@ import { setObservabilitySaleorApiUrl } from "@/lib/observability-saleor-api-url
 import { saleorApp } from "@/lib/saleor-app";
 import { appConfigRepoImpl } from "@/modules/app-config/repositories/app-config-repo-impl";
 import { TransactionEventReporter } from "@/modules/saleor/transaction-event-reporter";
+import { TransactionEventsFetcher } from "@/modules/saleor/transaction-events-fetcher";
 import { StripeWebhookManager } from "@/modules/stripe/stripe-webhook-manager";
 import { StripeWebhookSignatureValidator } from "@/modules/stripe/stripe-webhook-signature-validator";
 import { transactionRecorder } from "@/modules/transactions-recording/repositories/transaction-recorder-impl";
@@ -36,6 +37,9 @@ const useCase = new StripeWebhookUseCase({
     return new TransactionEventReporter({
       graphqlClient: createInstrumentedGraphqlClient(authData),
     });
+  },
+  transactionEventsFetcherFactory(authData) {
+    return new TransactionEventsFetcher(createInstrumentedGraphqlClient(authData));
   },
   webhookManager: new StripeWebhookManager(),
 });

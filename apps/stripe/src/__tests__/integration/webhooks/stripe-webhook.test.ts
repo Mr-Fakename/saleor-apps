@@ -264,7 +264,10 @@ describe("Stripe Webhook: integration", () => {
 
         expect(body).toStrictEqual("Ok");
 
-        const requestSpyData = saleorRequestVarsSpy.mock.calls[0][0];
+        // The handler first reads the transaction's events (A2e), then reports the refund.
+        const requestSpyData = saleorRequestVarsSpy.mock.calls
+          .map(([request]) => request)
+          .find((request) => request.operationName === "TransactionEventReport");
 
         expect(requestSpyData.variables).toStrictEqual({
           actions: ["REFUND"],

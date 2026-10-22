@@ -48,6 +48,3 @@ export const RefundAlreadyRecordedError = RefundRefusedError.subclass(
 export type RefundRefusal = InstanceType<
   typeof RefundRequestChangedError | typeof RefundAlreadyRecordedError
 >;
-
-export const isRefundRefusal = (error: unknown): error is RefundRefusal =>
-  error instanceof RefundRefusedError;

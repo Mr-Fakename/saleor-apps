@@ -25,9 +25,9 @@ export type TransactionRefundRequestedPayload = Omit<
 
 /**
  * True when Saleor already recorded the success of this Stripe refund on the transaction.
- * A refund the app created is reported under the PaymentIntent ID, with the refund ID only in
- * `externalUrl` (StripeRefundHandler); a refund created outside Saleor is reported under the
- * refund ID itself.
+ * Since A2e every refund is reported under its own refund ID; a refund the app created before
+ * A2e was reported under the PaymentIntent ID, with the refund ID only in `externalUrl`
+ * (StripeRefundHandler, resolveStripeRefundPspReference).
  */
 export const isRefundRecordedAsSuccess = (
   events: ReadonlyArray<RecordedTransactionEvent>,

@@ -261,9 +261,9 @@ describe("TRANSACTION_REFUND_REQUESTED signature verification (NR-28)", () => {
     );
 
     expect(response.status).toBe(200);
-    // The app answers with the PaymentIntent id as pspReference (see use-case-response.ts).
+    // The app answers with the Stripe refund id as pspReference (A2e, see use-case-response.ts).
     await expect(response.json()).resolves.toStrictEqual({
-      pspReference: mockedStripePaymentIntentId,
+      pspReference: "re_NR28",
     });
     expect(mockedStripeRefundsApi.createRefund).toHaveBeenCalledOnce();
     expect(mockedStripeRefundsApi.createRefund.mock.calls[0][0].paymentIntentId).toBe(

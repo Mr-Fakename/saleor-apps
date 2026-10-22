@@ -28,8 +28,26 @@ import { IStripeRefundsApiFactory } from "@/modules/stripe/types";
 import { RefundFailureResult } from "@/modules/transaction-result/refund-result";
 
 import { RefundAlreadyRecordedError, RefundRequestChangedError } from "./refund-refusal-errors";
+import { TransactionRefundRequestedPayload } from "./refund-requested-payload";
 import { TransactionRefundRequestedUseCase } from "./use-case";
-import { TransactionRefundRequestedUseCaseResponses } from "./use-case-response";
+import {
+  RefundOutcomeUnknownResponse,
+  TransactionRefundRequestedUseCaseResponses,
+} from "./use-case-response";
+
+/** createRefundFailurePspReference: unique, never a PaymentIntent or a Stripe refund id. */
+const UNIQUE_FAILURE_REFERENCE = /^refund-failure-[0-9a-f-]{36}$/;
+
+/** The JSON body Saleor receives from the app. */
+type SaleorAnswer = {
+  pspReference?: string;
+  result?: string;
+  message?: string;
+  externalUrl?: string;
+  actions?: string[];
+};
+
+const saleorAnswer = async (response: Response) => (await response.json()) as SaleorAnswer;
 
 describe("TransactionRefundRequestedUseCase", () => {
   const stripeRefundsApiFactory = {
@@ -447,9 +465,10 @@ describe("TransactionRefundRequestedUseCase", () => {
        * Review round 3 (P1): Saleor saves the answer with include_in_calculations=True and
        * groups refund events by pspReference; a REFUND_FAILURE under the PaymentIntent newer
        * than the refund the earlier attempt may have made drops that refund from
-       * refundedAmount and invites staff to refund again.
+       * refundedAmount and invites staff to refund again. A2e: without a pspReference it can
+       * match Saleor's own oldest failure without one; a unique reference matches nothing.
        */
-      it("answers that refusal without pspReference, so Saleor cannot drop an earlier refund of the PaymentIntent", async () => {
+      it("answers that refusal under a unique pspReference that is not the PaymentIntent, so Saleor cannot drop an earlier refund of the PaymentIntent", async () => {
         vi.spyOn(appContextContainer, "getContextValue").mockReturnValue({ stripeEnv: "TEST" });
         vi.spyOn(mockedStripeRefundsApi, "createRefund").mockImplementationOnce(async () =>
           err(
@@ -480,10 +499,11 @@ describe("TransactionRefundRequestedUseCase", () => {
           response instanceof TransactionRefundRequestedUseCaseResponses.Failure && response.error,
         ).toBeInstanceOf(RefundRequestChangedError);
 
-        const body = await response.getResponse().json();
+        const body = await saleorAnswer(response.getResponse());
 
         expect(body).toMatchObject({ result: "REFUND_FAILURE" });
-        expect(body).not.toHaveProperty("pspReference");
+        expect(body.pspReference).toMatch(UNIQUE_FAILURE_REFERENCE);
+        expect(body.pspReference).not.toBe(mockedStripePaymentIntentId);
       });
     });
 
@@ -586,9 +606,10 @@ describe("TransactionRefundRequestedUseCase", () => {
       /*
        * Review round 3 (P1): under the PaymentIntent's pspReference this REFUND_FAILURE is
        * newer than the REFUND_SUCCESS Saleor recorded for the very refund Stripe returned, so
-       * Saleor would drop that real refund from refundedAmount.
+       * Saleor would drop that real refund from refundedAmount. A2e: a unique pspReference,
+       * neither the PaymentIntent nor the refund id, matches none of Saleor's events.
        */
-      it("answers that refusal without pspReference, so Saleor keeps the refund it recorded", async () => {
+      it("answers that refusal under a unique pspReference, so Saleor keeps the refund it recorded", async () => {
         vi.spyOn(appContextContainer, "getContextValue").mockReturnValue({ stripeEnv: "TEST" });
         stripeAnswersWithRefund(HOUR);
 
@@ -603,10 +624,12 @@ describe("TransactionRefundRequestedUseCase", () => {
 
         expect(failure?.error).toBeInstanceOf(RefundAlreadyRecordedError);
 
-        const body = await failure?.getResponse().json();
+        const body = failure && (await saleorAnswer(failure.getResponse()));
 
         expect(body).toMatchObject({ result: "REFUND_FAILURE" });
-        expect(body).not.toHaveProperty("pspReference");
+        expect(body?.pspReference).toMatch(UNIQUE_FAILURE_REFERENCE);
+        expect(body?.pspReference).not.toBe(mockedStripePaymentIntentId);
+        expect(body?.pspReference).not.toBe(REPLAYED_REFUND_ID);
       });
 
       it.each<{
@@ -725,6 +748,312 @@ describe("TransactionRefundRequestedUseCase", () => {
 
       expect(spy).toHaveBeenCalledTimes(2);
       expect(spy.mock.calls[1][0]).toStrictEqual(spy.mock.calls[0][0]);
+    });
+  });
+
+  /*
+   * A2e (a): Saleor 3.22.74 de-duplicates transaction events by (pspReference, type) and
+   * counts only the latest REFUND_SUCCESS per pspReference. Under the PaymentIntent a second
+   * refund was dropped or rejected; each Stripe refund now has its own: its re_ id.
+   */
+  describe("pspReference of the answer to Saleor (A2e)", () => {
+    const FIRST_GRANTED_REFUND = { id: "T3JkZXJHcmFudGVkUmVmdW5kOjE=" };
+    const SECOND_GRANTED_REFUND = { id: "T3JkZXJHcmFudGVkUmVmdW5kOjI=" };
+
+    const stripeReturnsRefund = (id: string, createdSecondsAgo = 0) =>
+      vi.spyOn(mockedStripeRefundsApi, "createRefund").mockImplementationOnce(async () =>
+        ok({
+          status: "succeeded",
+          amount: 100_00,
+          currency: "usd",
+          id,
+          created: Math.floor(Date.now() / 1000) - createdSecondsAgo,
+        } as Stripe.Refund),
+      );
+
+    const execute = (event: TransactionRefundRequestedPayload) =>
+      new TransactionRefundRequestedUseCase({
+        appConfigRepo: mockedAppConfigRepo,
+        stripeRefundsApiFactory,
+      }).execute({ saleorApiUrl: mockedSaleorApiUrl, appId: mockedSaleorAppId, event });
+
+    const answeredPspReference = async (event: TransactionRefundRequestedPayload) => {
+      const response = (await execute(event))._unsafeUnwrap();
+
+      expect(response).toBeInstanceOf(TransactionRefundRequestedUseCaseResponses.Success);
+
+      return (await saleorAnswer(response.getResponse())).pspReference;
+    };
+
+    /** The payload of a Saleor on the current subscription (dess): granted refund + events. */
+    const newPayload = (
+      grantedRefund: { id: string },
+      events: NonNullable<NonNullable<TransactionRefundRequestedPayload["transaction"]>["events"]>,
+    ): TransactionRefundRequestedPayload => {
+      const base = getMockedTransactionRefundRequestedEvent();
+
+      return {
+        ...base,
+        grantedRefund,
+        transaction: base.transaction && { ...base.transaction, events },
+      };
+    };
+
+    it("answers two granted refunds on one PaymentIntent with their own Stripe refund ids", async () => {
+      stripeReturnsRefund("re_FIRST");
+
+      const first = await answeredPspReference(newPayload(FIRST_GRANTED_REFUND, []));
+
+      stripeReturnsRefund("re_SECOND");
+
+      const second = await answeredPspReference(
+        newPayload(SECOND_GRANTED_REFUND, [
+          { type: "REFUND_REQUEST", pspReference: "re_FIRST", externalUrl: "" },
+          {
+            type: "REFUND_SUCCESS",
+            pspReference: "re_FIRST",
+            externalUrl: generateRefundStripeDashboardUrl(createStripeRefundId("re_FIRST"), "TEST"),
+          },
+        ]),
+      );
+
+      expect(first).toBe("re_FIRST");
+      expect(second).toBe("re_SECOND");
+    });
+
+    it("answers with the Stripe refund id when the payload has no grantedRefund and no events (webhook not re-registered, e.g. SDS)", async () => {
+      const oldPayload = getMockedTransactionRefundRequestedEvent();
+
+      expect(oldPayload).not.toHaveProperty("grantedRefund");
+      expect(oldPayload.transaction).not.toHaveProperty("events");
+
+      stripeReturnsRefund(mockedStripeRefundId);
+
+      expect(await answeredPspReference(oldPayload)).toBe(mockedStripeRefundId);
+    });
+
+    /*
+     * Compatibility: a refund Saleor recorded under the PaymentIntent before A2e is counted
+     * in that group. Answering its retry with the re_ id would open a REFUND_REQUEST that no
+     * Stripe event ever closes, and a later Stripe event under the re_ id would count the
+     * refund twice.
+     */
+    it("answers with the PaymentIntent when Stripe returns a refund Saleor recorded under it before A2e", async () => {
+      stripeReturnsRefund(mockedStripeRefundId, 3600);
+
+      const pspReference = await answeredPspReference(
+        newPayload(FIRST_GRANTED_REFUND, [
+          { type: "REFUND_REQUEST", pspReference: mockedStripePaymentIntentId, externalUrl: "" },
+          {
+            type: "REFUND_SUCCESS",
+            pspReference: mockedStripePaymentIntentId,
+            externalUrl: generateRefundStripeDashboardUrl(mockedStripeRefundId, "LIVE"),
+          },
+        ]),
+      );
+
+      expect(pspReference).toBe(mockedStripePaymentIntentId);
+    });
+
+    it("reports a definite Stripe error as REFUND_FAILURE under a unique pspReference, with the Stripe link and message", async () => {
+      vi.spyOn(appContextContainer, "getContextValue").mockReturnValue({ stripeEnv: "LIVE" });
+      vi.spyOn(mockedStripeRefundsApi, "createRefund").mockImplementationOnce(async () =>
+        err(
+          new Stripe.errors.StripeInvalidRequestError({
+            type: "invalid_request_error",
+            code: "charge_already_refunded",
+            message: "Charge ch_1 has already been refunded.",
+            statusCode: 400,
+          }),
+        ),
+      );
+
+      const response = (
+        await execute(newPayload(FIRST_GRANTED_REFUND, []))
+      )._unsafeUnwrap();
+
+      expect(response).toBeInstanceOf(TransactionRefundRequestedUseCaseResponses.Failure);
+
+      const body = await saleorAnswer(response.getResponse());
+
+      expect(body).toStrictEqual({
+        result: "REFUND_FAILURE",
+        pspReference: expect.stringMatching(UNIQUE_FAILURE_REFERENCE),
+        message: "There is a problem with the request to Stripe API",
+        actions: ["REFUND"],
+        externalUrl: "https://dashboard.stripe.com/payments/pi_TEST_TEST_TEST",
+      });
+    });
+
+    /*
+     * Saleor 3.22.74 matched a retry's failure with the same pspReference to the granted
+     * refund's earlier failure (same amount): no new event, so the granted refund's newest
+     * event stayed its REFUND_REQUEST and it stayed PENDING for good.
+     */
+    it("gives the failure of each retry of one granted refund its own pspReference", async () => {
+      vi.spyOn(appContextContainer, "getContextValue").mockReturnValue({ stripeEnv: "LIVE" });
+
+      const replayedStripeError = () =>
+        err(
+          new Stripe.errors.StripeCardError({
+            type: "card_error",
+            code: "expired_card",
+            message: "The card has expired.",
+            statusCode: 402,
+          }),
+        );
+
+      vi.spyOn(mockedStripeRefundsApi, "createRefund")
+        .mockImplementationOnce(async () => replayedStripeError())
+        .mockImplementationOnce(async () => replayedStripeError());
+
+      const first = (await execute(newPayload(FIRST_GRANTED_REFUND, [])))._unsafeUnwrap();
+      const retry = (await execute(newPayload(FIRST_GRANTED_REFUND, [])))._unsafeUnwrap();
+
+      const firstBody = await saleorAnswer(first.getResponse());
+      const retryBody = await saleorAnswer(retry.getResponse());
+
+      expect(firstBody.result).toBe("REFUND_FAILURE");
+      expect(retryBody.result).toBe("REFUND_FAILURE");
+      expect(firstBody.pspReference).toMatch(UNIQUE_FAILURE_REFERENCE);
+      expect(retryBody.pspReference).toMatch(UNIQUE_FAILURE_REFERENCE);
+      expect(retryBody.pspReference).not.toBe(firstBody.pspReference);
+    });
+  });
+
+  /*
+   * A2e (c): the refund may exist although Stripe gave no answer. A REFUND_FAILURE would tell
+   * staff it failed (and a new granted refund would refund twice). Saleor 3.22.74 re-sends the
+   * same delivery when the app answers HTTP >= 500 (transport.py handle_transaction_request_task,
+   * 5 retries, 10 s * 2^n backoff); the same payload keeps the same idempotency key.
+   */
+  describe("an outcome Stripe did not report (A2e c)", () => {
+    const execute = (event: TransactionRefundRequestedPayload) =>
+      new TransactionRefundRequestedUseCase({
+        appConfigRepo: mockedAppConfigRepo,
+        stripeRefundsApiFactory,
+      }).execute({ saleorApiUrl: mockedSaleorApiUrl, appId: mockedSaleorAppId, event });
+
+    it.each([
+      {
+        case: "a network failure or timeout (StripeConnectionError)",
+        error: () =>
+          new Stripe.errors.StripeConnectionError({
+            message: "Request aborted due to timeout being reached (6000ms)",
+          } as Stripe.StripeRawError),
+      },
+      {
+        case: "a Stripe server error (StripeAPIError)",
+        error: () =>
+          new Stripe.errors.StripeAPIError({
+            type: "api_error",
+            message: "Something went wrong on Stripe's end.",
+            statusCode: 500,
+          }),
+      },
+      {
+        case: "any Stripe error with a 5xx status",
+        error: () =>
+          new Stripe.errors.StripeInvalidRequestError({
+            type: "invalid_request_error",
+            message: "Service unavailable",
+            statusCode: 503,
+          }),
+      },
+      {
+        case: "the same key still in progress at Stripe (409 idempotency_key_in_use)",
+        error: () =>
+          new Stripe.errors.StripeInvalidRequestError({
+            type: "invalid_request_error",
+            code: "idempotency_key_in_use",
+            message: "There is currently another in-progress request using this idempotency key.",
+            statusCode: 409,
+          }),
+      },
+      {
+        case: "the same key still in progress at Stripe (409 idempotency_error)",
+        error: () =>
+          new Stripe.errors.StripeIdempotencyError({
+            type: "idempotency_error",
+            message: "There is currently another in-progress request using this idempotency key.",
+            statusCode: 409,
+          }),
+      },
+    ])("answers HTTP 503 and no REFUND_FAILURE on $case, so Saleor re-sends the request", async ({
+      error,
+    }) => {
+      vi.spyOn(mockedStripeRefundsApi, "createRefund").mockImplementationOnce(async () =>
+        err(error()),
+      );
+
+      const result = await execute(getMockedTransactionRefundRequestedEvent());
+
+      const response = result._unsafeUnwrapErr();
+
+      expect(response).toBeInstanceOf(RefundOutcomeUnknownResponse);
+
+      const httpResponse = response.getResponse();
+
+      expect(httpResponse.status).toBe(503);
+      expect(await httpResponse.json()).not.toHaveProperty("result");
+    });
+
+    it("gives Saleor's retry the same idempotency key, so it gets back the refund Stripe may have made", async () => {
+      const spy = vi
+        .spyOn(mockedStripeRefundsApi, "createRefund")
+        .mockImplementationOnce(async () =>
+          err(
+            new Stripe.errors.StripeConnectionError({
+              message: "An error occurred with our connection to Stripe.",
+            } as Stripe.StripeRawError),
+          ),
+        )
+        .mockImplementationOnce(async () =>
+          ok({
+            status: "succeeded",
+            amount: 100_00,
+            currency: "usd",
+            id: mockedStripeRefundId.toString(),
+            created: Math.floor(Date.now() / 1000) - 12,
+          } as Stripe.Refund),
+        );
+
+      const event = {
+        ...getMockedTransactionRefundRequestedEvent(),
+        grantedRefund: { id: "T3JkZXJHcmFudGVkUmVmdW5kOjE=" },
+      };
+
+      const first = await execute(event);
+      const retry = await execute(event);
+
+      expect(first._unsafeUnwrapErr()).toBeInstanceOf(RefundOutcomeUnknownResponse);
+      expect(spy).toHaveBeenCalledTimes(2);
+      expect(spy.mock.calls[1][0].idempotencyKey).toBe(spy.mock.calls[0][0].idempotencyKey);
+
+      const success = retry._unsafeUnwrap();
+
+      expect(success).toBeInstanceOf(TransactionRefundRequestedUseCaseResponses.Success);
+      expect(await success.getResponse().json()).toStrictEqual({
+        pspReference: mockedStripeRefundId,
+      });
+    });
+
+    it("still reports a definite Stripe error (e.g. rate limit) as REFUND_FAILURE", async () => {
+      vi.spyOn(mockedStripeRefundsApi, "createRefund").mockImplementationOnce(async () =>
+        err(
+          new Stripe.errors.StripeRateLimitError({
+            type: "rate_limit_error",
+            message: "Too many requests",
+            statusCode: 429,
+          }),
+        ),
+      );
+
+      const result = await execute(getMockedTransactionRefundRequestedEvent());
+
+      expect(result._unsafeUnwrap()).toBeInstanceOf(
+        TransactionRefundRequestedUseCaseResponses.Failure,
+      );
     });
   });
 

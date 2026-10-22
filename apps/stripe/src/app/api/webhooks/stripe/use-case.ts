@@ -14,6 +14,7 @@ import {
   ITransactionEventReporter,
   TransactionEventReporterErrors,
 } from "@/modules/saleor/transaction-event-reporter";
+import { ITransactionEventsFetcher } from "@/modules/saleor/transaction-events-fetcher";
 import { StripeClient } from "@/modules/stripe/stripe-client";
 import { StripeEnv } from "@/modules/stripe/stripe-env";
 import { StripeRestrictedKey } from "@/modules/stripe/stripe-restricted-key";
@@ -44,6 +45,7 @@ type R = Promise<
 
 type StripeVerifyEventFactory = (stripeClient: StripeClient) => IStripeEventVerify;
 type SaleorTransactionEventReporterFactory = (authData: AuthData) => ITransactionEventReporter;
+type SaleorTransactionEventsFetcherFactory = (authData: AuthData) => ITransactionEventsFetcher;
 
 const ObjectMetadataMissingError = BaseError.subclass("ObjectMetadataMissingError");
 
@@ -54,6 +56,7 @@ export class StripeWebhookUseCase {
   private logger = createLogger("StripeWebhookUseCase");
   private transactionRecorder: TransactionRecorderRepo;
   private transactionEventReporterFactory: SaleorTransactionEventReporterFactory;
+  private transactionEventsFetcherFactory: SaleorTransactionEventsFetcherFactory;
   private webhookManager: StripeWebhookManager;
 
   constructor(deps: {
@@ -62,6 +65,8 @@ export class StripeWebhookUseCase {
     apl: APL;
     transactionRecorder: TransactionRecorderRepo;
     transactionEventReporterFactory: SaleorTransactionEventReporterFactory;
+    /** Reads a Saleor transaction's events with the app token (refunds, A2e). */
+    transactionEventsFetcherFactory: SaleorTransactionEventsFetcherFactory;
     webhookManager: StripeWebhookManager;
   }) {
     this.appConfigRepo = deps.appConfigRepo;
@@ -69,6 +74,7 @@ export class StripeWebhookUseCase {
     this.apl = deps.apl;
     this.transactionRecorder = deps.transactionRecorder;
     this.transactionEventReporterFactory = deps.transactionEventReporterFactory;
+    this.transactionEventsFetcherFactory = deps.transactionEventsFetcherFactory;
     this.webhookManager = deps.webhookManager;
   }
 
@@ -97,11 +103,13 @@ export class StripeWebhookUseCase {
     saleorApiUrl,
     appId,
     stripeEnv,
+    transactionEventsFetcher,
   }: {
     event: Stripe.Event;
     saleorApiUrl: SaleorApiUrl;
     appId: string;
     stripeEnv: StripeEnv;
+    transactionEventsFetcher: ITransactionEventsFetcher;
   }) {
     switch (event.data.object.object) {
       case "payment_intent": {
@@ -156,6 +164,7 @@ export class StripeWebhookUseCase {
           event,
           stripeEnv,
           transactionRecorder: this.transactionRecorder,
+          transactionEventsFetcher,
           appId,
           saleorApiUrl,
         });
@@ -324,6 +333,7 @@ export class StripeWebhookUseCase {
       saleorApiUrl: webhookParams.saleorApiUrl,
       appId: authData.appId,
       stripeEnv: config.value.getStripeEnvValue(),
+      transactionEventsFetcher: this.transactionEventsFetcherFactory(authData),
     });
 
     if (processingResult.isErr()) {
@@ -332,6 +342,18 @@ export class StripeWebhookUseCase {
        */
       if (processingResult.error instanceof ObjectMetadataMissingError) {
         return err(new ObjectCreatedOutsideOfSaleorResponse());
+      }
+
+      /*
+       * A2e round 2 (P1): expected and retryable. A non-2xx answer makes Stripe re-send the
+       * event; by then Saleor has tagged its refund request and the report is linked.
+       */
+      if (processingResult.error instanceof StripeRefundHandler.RefundRequestNotTaggedYetError) {
+        this.logger.warn("Refund report deferred until Saleor tags its refund request", {
+          error: processingResult.error.message,
+        });
+
+        return err(new StripeWebhookSeverErrorResponse());
       }
 
       this.logger.error("Failed to process event", {

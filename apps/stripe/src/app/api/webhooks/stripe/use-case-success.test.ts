@@ -1,5 +1,5 @@
 import { APL } from "@saleor/app-sdk/APL";
-import { ok } from "neverthrow";
+import { err, ok } from "neverthrow";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { mockedAppConfigRepo } from "@/__tests__/mocks/app-config-repo";
@@ -21,6 +21,10 @@ import {
   ITransactionEventReporter,
   TransactionEventReportResultResult,
 } from "@/modules/saleor/transaction-event-reporter";
+import {
+  ITransactionEventsFetcher,
+  TransactionEventsFetcherErrors,
+} from "@/modules/saleor/transaction-events-fetcher";
 import { createStripePaymentIntentId } from "@/modules/stripe/stripe-payment-intent-id";
 import { StripeWebhookManager } from "@/modules/stripe/stripe-webhook-manager";
 import { IStripeEventVerify } from "@/modules/stripe/types";
@@ -46,6 +50,10 @@ const mockEventReporter = {
   reportTransactionEvent: vi.fn(),
 } satisfies ITransactionEventReporter;
 
+const mockEventsFetcher = {
+  fetchTransactionEvents: vi.fn(),
+} satisfies ITransactionEventsFetcher;
+
 let instance: StripeWebhookUseCase;
 
 const mockTransactionRecorder = new MockedTransactionRecorder();
@@ -61,6 +69,9 @@ describe("StripeWebhookUseCase - handling payment_intent.success event", () => {
       webhookEventVerifyFactory: () => eventVerify,
       transactionEventReporterFactory() {
         return mockEventReporter;
+      },
+      transactionEventsFetcherFactory() {
+        return mockEventsFetcher;
       },
       transactionRecorder: mockTransactionRecorder,
       webhookManager: new StripeWebhookManager(),
@@ -214,6 +225,9 @@ describe("StripeWebhookUseCase - handling payment_intent.amount_capturable_updat
       transactionEventReporterFactory() {
         return mockEventReporter;
       },
+      transactionEventsFetcherFactory() {
+        return mockEventsFetcher;
+      },
       transactionRecorder: mockTransactionRecorder,
       webhookManager: new StripeWebhookManager(),
     });
@@ -300,6 +314,9 @@ describe("StripeWebhookUseCase - handling payment_intent.payment_failed event", 
       webhookEventVerifyFactory: () => eventVerify,
       transactionEventReporterFactory() {
         return mockEventReporter;
+      },
+      transactionEventsFetcherFactory() {
+        return mockEventsFetcher;
       },
       transactionRecorder: mockTransactionRecorder,
       webhookManager: new StripeWebhookManager(),
@@ -453,6 +470,9 @@ describe("StripeWebhookUseCase - handling payment_intent.processing event", () =
       transactionEventReporterFactory() {
         return mockEventReporter;
       },
+      transactionEventsFetcherFactory() {
+        return mockEventsFetcher;
+      },
       transactionRecorder: mockTransactionRecorder,
       webhookManager: new StripeWebhookManager(),
     });
@@ -600,6 +620,9 @@ describe("StripeWebhookUseCase - handling payment_intent.requires_action event",
       webhookEventVerifyFactory: () => eventVerify,
       transactionEventReporterFactory() {
         return mockEventReporter;
+      },
+      transactionEventsFetcherFactory() {
+        return mockEventsFetcher;
       },
       transactionRecorder: mockTransactionRecorder,
       webhookManager: new StripeWebhookManager(),
@@ -753,6 +776,9 @@ describe("StripeWebhookUseCase - handling payment_intent.canceled event", () => 
       transactionEventReporterFactory() {
         return mockEventReporter;
       },
+      transactionEventsFetcherFactory() {
+        return mockEventsFetcher;
+      },
       transactionRecorder: mockTransactionRecorder,
       webhookManager: new StripeWebhookManager(),
     });
@@ -893,6 +919,8 @@ describe("StripeWebhookUseCase - handling charge.refund.updated event", () => {
   beforeEach(() => {
     mockApl.get.mockImplementation(async () => mockAuthData);
     mockTransactionRecorder.reset();
+    // Saleor holds no earlier event for these refunds (A2e: no PaymentIntent-era record).
+    mockEventsFetcher.fetchTransactionEvents.mockImplementation(async () => ok([]));
 
     instance = new StripeWebhookUseCase({
       apl: mockApl,
@@ -900,6 +928,9 @@ describe("StripeWebhookUseCase - handling charge.refund.updated event", () => {
       webhookEventVerifyFactory: () => eventVerify,
       transactionEventReporterFactory() {
         return mockEventReporter;
+      },
+      transactionEventsFetcherFactory() {
+        return mockEventsFetcher;
       },
       transactionRecorder: mockTransactionRecorder,
       webhookManager: new StripeWebhookManager(),
@@ -962,7 +993,7 @@ describe("StripeWebhookUseCase - handling charge.refund.updated event", () => {
         },
         "externalUrl": "https://dashboard.stripe.com/refunds/re_TEST_TEST_TEST",
         "message": "Refund was successful",
-        "pspReference": "pi_TEST_TEST_TEST",
+        "pspReference": "re_TEST_TEST_TEST",
         "time": toSatisfy<[Function anonymous]>,
         "transactionId": "mocked-transaction-id",
         "type": "REFUND_SUCCESS",
@@ -1028,7 +1059,7 @@ describe("StripeWebhookUseCase - handling charge.refund.updated event", () => {
         },
         "externalUrl": "https://dashboard.stripe.com/refunds/re_TEST_TEST_TEST",
         "message": "Refund failed",
-        "pspReference": "pi_TEST_TEST_TEST",
+        "pspReference": "re_TEST_TEST_TEST",
         "time": toSatisfy<[Function anonymous]>,
         "transactionId": "mocked-transaction-id",
         "type": "REFUND_FAILURE",
@@ -1092,12 +1123,75 @@ describe("StripeWebhookUseCase - handling charge.refund.updated event", () => {
         },
         "externalUrl": "https://dashboard.stripe.com/refunds/re_TEST_TEST_TEST",
         "message": "Refund is processing",
-        "pspReference": "pi_TEST_TEST_TEST",
+        "pspReference": "re_TEST_TEST_TEST",
         "time": toSatisfy<[Function anonymous]>,
         "transactionId": "mocked-transaction-id",
         "type": "REFUND_REQUEST",
       }
     `);
+  });
+
+  it("Reads the events of the Saleor transaction recorded for the payment intent (A2e)", async () => {
+    const event = getMockedChargeRefundUpdatedEvent();
+
+    eventVerify.verifyEvent.mockImplementationOnce(() => ok(event));
+
+    mockTransactionRecorder.transactions = {
+      [mockedStripePaymentIntentId]: new RecordedTransaction({
+        saleorTransactionId: mockedSaleorTransactionId,
+        stripePaymentIntentId: mockedStripePaymentIntentId,
+        saleorTransactionFlow: createSaleorTransactionFlow("CHARGE"),
+        resolvedTransactionFlow: createResolvedTransactionFlow("CHARGE"),
+        selectedPaymentMethod: "card",
+      }),
+    };
+
+    mockEventReporter.reportTransactionEvent.mockImplementationOnce(async () =>
+      ok({ createdEventId: "TEST_EVENT_ID" }),
+    );
+
+    await instance.execute({
+      rawBody: "TEST BODY",
+      signatureHeader: "SIGNATURE",
+      webhookParams: webhookParams,
+    });
+
+    expect(mockEventsFetcher.fetchTransactionEvents).toHaveBeenCalledExactlyOnceWith({
+      transactionId: mockedSaleorTransactionId,
+    });
+  });
+
+  it("Returns 500 to Stripe (which retries) and reports nothing when Saleor's transaction events cannot be read (A2e)", async () => {
+    const event = getMockedChargeRefundUpdatedEvent();
+
+    eventVerify.verifyEvent.mockImplementationOnce(() => ok(event));
+    mockEventsFetcher.fetchTransactionEvents.mockImplementation(async () =>
+      err(new TransactionEventsFetcherErrors.FetchError("Saleor unreachable")),
+    );
+
+    mockTransactionRecorder.transactions = {
+      [mockedStripePaymentIntentId]: new RecordedTransaction({
+        saleorTransactionId: mockedSaleorTransactionId,
+        stripePaymentIntentId: mockedStripePaymentIntentId,
+        saleorTransactionFlow: createSaleorTransactionFlow("CHARGE"),
+        resolvedTransactionFlow: createResolvedTransactionFlow("CHARGE"),
+        selectedPaymentMethod: "card",
+      }),
+    };
+
+    const result = await instance.execute({
+      rawBody: "TEST BODY",
+      signatureHeader: "SIGNATURE",
+      webhookParams: webhookParams,
+    });
+
+    expect(result._unsafeUnwrapErr()).toMatchInlineSnapshot(`
+      StripeWebhookSeverErrorResponse {
+        "message": "Server error",
+        "statusCode": 500,
+      }
+    `);
+    expect(mockEventReporter.reportTransactionEvent).not.toHaveBeenCalled();
   });
 });
 
@@ -1105,6 +1199,8 @@ describe("StripeWebhookUseCase - handling events without metadata created by Sal
   beforeEach(() => {
     mockApl.get.mockImplementation(async () => mockAuthData);
     mockTransactionRecorder.reset();
+    // Saleor holds no earlier event for these refunds (A2e: no PaymentIntent-era record).
+    mockEventsFetcher.fetchTransactionEvents.mockImplementation(async () => ok([]));
 
     instance = new StripeWebhookUseCase({
       apl: mockApl,
@@ -1112,6 +1208,9 @@ describe("StripeWebhookUseCase - handling events without metadata created by Sal
       webhookEventVerifyFactory: () => eventVerify,
       transactionEventReporterFactory() {
         return mockEventReporter;
+      },
+      transactionEventsFetcherFactory() {
+        return mockEventsFetcher;
       },
       transactionRecorder: mockTransactionRecorder,
       webhookManager: new StripeWebhookManager(),

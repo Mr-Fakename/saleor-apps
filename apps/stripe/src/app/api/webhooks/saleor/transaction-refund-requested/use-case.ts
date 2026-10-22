@@ -11,6 +11,7 @@ import { BaseError } from "@/lib/errors";
 import { createLogger } from "@/lib/logger";
 import { loggerContext } from "@/lib/logger-context";
 import { AppConfigRepo } from "@/modules/app-config/repositories/app-config-repo";
+import { resolveStripeRefundPspReference } from "@/modules/saleor/refund-psp-reference";
 import { SaleorApiUrl } from "@/modules/saleor/saleor-api-url";
 import { saleorGrantedRefundIdFromPayload } from "@/modules/saleor/saleor-granted-refund-id";
 import { SaleorMoney } from "@/modules/saleor/saleor-money";
@@ -27,6 +28,7 @@ import { StripeMoney } from "@/modules/stripe/stripe-money";
 import { createStripePaymentIntentId } from "@/modules/stripe/stripe-payment-intent-id";
 import { createStripeRefundId } from "@/modules/stripe/stripe-refund-id";
 import { createStripeRefundIdempotencyKey } from "@/modules/stripe/stripe-refund-idempotency-key";
+import { isStripeOutcomeUnknown } from "@/modules/stripe/stripe-request-outcome";
 import { IStripeRefundsApiFactory } from "@/modules/stripe/types";
 import { RefundFailureResult } from "@/modules/transaction-result/refund-result";
 
@@ -36,6 +38,7 @@ import {
   TransactionRefundRequestedPayload,
 } from "./refund-requested-payload";
 import {
+  RefundOutcomeUnknownResponse,
   TransactionRefundRequestedUseCaseResponses,
   TransactionRefundRequestedUseCaseResponsesType,
 } from "./use-case-response";
@@ -48,7 +51,10 @@ const REPLAY_DETECTION_MARGIN_SECONDS = 30;
 
 type UseCaseExecuteResult = Result<
   TransactionRefundRequestedUseCaseResponsesType,
-  AppIsNotConfiguredResponse | BrokenAppResponse | MalformedRequestResponse
+  | AppIsNotConfiguredResponse
+  | BrokenAppResponse
+  | MalformedRequestResponse
+  | RefundOutcomeUnknownResponse
 >;
 
 export class TransactionRefundRequestedUseCase {
@@ -216,6 +222,24 @@ export class TransactionRefundRequestedUseCase {
       const stripeError = mapStripeErrorToApiError(createRefundResult.error);
 
       /*
+       * A2e (c): no answer that says whether Stripe created the refund (connection error or
+       * timeout, Stripe 5xx, the same key still running). Not a REFUND_FAILURE: the refund may
+       * exist. HTTP 503 makes Saleor re-send this same request, whose idempotency key returns
+       * that refund (RefundOutcomeUnknownResponse). Checked before the idempotency refusal: a
+       * 409 "key in use" is not "key reused with other parameters".
+       */
+      if (isStripeOutcomeUnknown(createRefundResult.error)) {
+        this.logger.warn("Stripe refund outcome unknown: asking Saleor to retry the same request", {
+          error: stripeError.message,
+          stripePaymentIntentId,
+        });
+
+        return err(
+          new RefundOutcomeUnknownResponse(appContextContainer.getContextValue(), stripeError),
+        );
+      }
+
+      /*
        * Review round 2 (HIGH): Stripe saw this key with another amount. With the v2 key that
        * is a granted refund whose amount staff edited after a FAILURE, and that failed
        * attempt may have refunded the customer. Refused with a message that says so: a new
@@ -314,10 +338,27 @@ export class TransactionRefundRequestedUseCase {
       amount: saleorMoneyResult.value.amount,
     });
 
+    const stripeRefundId = createStripeRefundId(refund.id);
+
     return ok(
       new TransactionRefundRequestedUseCaseResponses.Success({
-        stripeRefundId: createStripeRefundId(refund.id),
+        stripeRefundId,
         stripePaymentIntentId: stripePaymentIntentId,
+        /*
+         * A2e: the Stripe refund id, so each refund has its own pspReference in Saleor. The
+         * PaymentIntent only when Stripe returned (idempotency replay) a refund that Saleor
+         * recorded under it before A2e: the payload's events (new subscription only) show it.
+         */
+        pspReference: resolveStripeRefundPspReference({
+          stripeRefund: {
+            id: stripeRefundId,
+            amount: refund.amount,
+            currency: refund.currency,
+            created: refund.created,
+          },
+          stripePaymentIntentId,
+          recordedEvents: event.transaction?.events ?? [],
+        }),
         appContext: appContextContainer.getContextValue(),
       }),
     );

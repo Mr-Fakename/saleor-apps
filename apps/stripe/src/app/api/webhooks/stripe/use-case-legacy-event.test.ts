@@ -9,6 +9,7 @@ import { mockedStripeConfig } from "@/__tests__/mocks/mock-stripe-config";
 import { MockedTransactionRecorder } from "@/__tests__/mocks/mocked-transaction-recorder";
 import { BaseError } from "@/lib/errors";
 import { ITransactionEventReporter } from "@/modules/saleor/transaction-event-reporter";
+import { ITransactionEventsFetcher } from "@/modules/saleor/transaction-events-fetcher";
 import { StripeWebhookManager } from "@/modules/stripe/stripe-webhook-manager";
 import { IStripeEventVerify } from "@/modules/stripe/types";
 
@@ -37,6 +38,10 @@ describe("StripeWebhookUseCase - Legacy event cases", () => {
     reportTransactionEvent: vi.fn(),
   } satisfies ITransactionEventReporter;
 
+  const mockEventsFetcher = {
+    fetchTransactionEvents: vi.fn(),
+  } satisfies ITransactionEventsFetcher;
+
   const mockTransactionRecorder = new MockedTransactionRecorder();
 
   const webhookManager = new StripeWebhookManager();
@@ -56,6 +61,9 @@ describe("StripeWebhookUseCase - Legacy event cases", () => {
       webhookEventVerifyFactory: () => eventVerify,
       transactionEventReporterFactory() {
         return mockEventReporter;
+      },
+      transactionEventsFetcherFactory() {
+        return mockEventsFetcher;
       },
       transactionRecorder: mockTransactionRecorder,
       webhookManager,

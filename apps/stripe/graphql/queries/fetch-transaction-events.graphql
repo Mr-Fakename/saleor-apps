@@ -1,0 +1,19 @@
+# Every event Saleor recorded on one transaction, with amount and time (A2e). Read by
+# StripeRefundHandler before it reports a refund the app created: a refund Saleor recorded
+# under the PaymentIntent before A2e stays under it, every other one is reported under its
+# own Stripe refund id. Needs the app token (HANDLE_PAYMENTS).
+query FetchTransactionEvents($transactionId: ID!) {
+  transaction(id: $transactionId) {
+    id
+    events {
+      type
+      pspReference
+      externalUrl
+      createdAt
+      amount {
+        amount
+        currency
+      }
+    }
+  }
+}
