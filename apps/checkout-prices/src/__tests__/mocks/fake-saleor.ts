@@ -1,4 +1,5 @@
-import type { DocumentNode } from "graphql";
+import { appendFileSync } from "node:fs";
+import { type DocumentNode, print } from "graphql";
 
 /**
  * In-memory stand-in for the Saleor GraphQL API, used at the urql-client
@@ -63,6 +64,34 @@ type OperationResult = { data?: unknown; error?: { message: string } };
 
 export function toGlobalId(type: string, id: string | number): string {
   return Buffer.from(`${type}:${id}`).toString("base64");
+}
+
+/**
+ * Contract recorder (OFF by default). With SALEOR_CONTRACT_OUT=<file>, every
+ * operation the app sends is appended as one JSON line {operationName, query,
+ * variables}, de-duplicated by document + the set of variable keys. The file is
+ * validated against the real Saleor schema by .ops/pipeline/saleor-contract-check.sh
+ * (this fake and graphql-js accept things Saleor rejects, e.g. prod 2026-10-22).
+ * Variables are JSON round-tripped on purpose: that is what goes over the wire
+ * (undefined dropped), and what Saleor's query-cost validator sees.
+ */
+const recordedContracts = new Set<string>();
+
+function recordContract(doc: DocumentNode, name: string, variables: Vars) {
+  const out = process.env.SALEOR_CONTRACT_OUT;
+
+  if (!out) {
+    return;
+  }
+  const query = print(doc);
+  const wire = JSON.parse(JSON.stringify(variables ?? {})) as Vars;
+  const key = JSON.stringify([query, Object.keys(wire).sort()]);
+
+  if (recordedContracts.has(key)) {
+    return;
+  }
+  recordedContracts.add(key);
+  appendFileSync(out, JSON.stringify({ operationName: name, query, variables: wire }) + "\n");
 }
 
 let uuidCounter = 0;
@@ -190,6 +219,7 @@ export class FakeSaleor {
     const name = operationName(doc);
 
     this.calls.push({ name, variables });
+    recordContract(doc, name, variables);
 
     if (this.failingOperationsOnce.delete(name)) {
       return { error: { message: `[Network] ${name} failed once` } };
