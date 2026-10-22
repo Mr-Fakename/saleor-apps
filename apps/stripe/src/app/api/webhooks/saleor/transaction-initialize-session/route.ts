@@ -8,6 +8,7 @@ import {
   UnhandledErrorResponse,
 } from "@/app/api/webhooks/saleor/saleor-webhook-responses";
 import { appContextContainer } from "@/lib/app-context";
+import { env } from "@/lib/env";
 import { BaseError } from "@/lib/errors";
 import { createInstrumentedGraphqlClient } from "@/lib/graphql-client";
 import { createLogger } from "@/lib/logger";
@@ -16,6 +17,7 @@ import { setObservabilitySaleorApiUrl } from "@/lib/observability-saleor-api-url
 import { setObservabilitySourceObjectId } from "@/lib/observability-source-object-id";
 import { saleorApp } from "@/lib/saleor-app";
 import { appConfigRepoImpl } from "@/modules/app-config/repositories/app-config-repo-impl";
+import { paymentFeeGateFromEnv } from "@/modules/payment-fee-gate/payment-fee-gate-config";
 import { CheckoutPaymentStateFetcher } from "@/modules/saleor/checkout-payment-state-fetcher";
 import { createSaleorApiUrl } from "@/modules/saleor/saleor-api-url";
 import { StripePaymentIntentsApiFactory } from "@/modules/stripe/stripe-payment-intents-api-factory";
@@ -40,6 +42,8 @@ const useCase = new TransactionInitializeSessionUseCase({
         token: authData.token,
       }),
     ),
+  // PayPal-fee hard gate (A3c): from PAYMENT_FEE_GATE & co, validated when env.ts loaded.
+  paymentFeeGate: paymentFeeGateFromEnv(env),
 });
 
 const logger = createLogger("TRANSACTION_INITIALIZE_SESSION route");

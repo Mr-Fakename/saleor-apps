@@ -12,6 +12,7 @@ import {
 import {
   TransactionInitializeSessionEventFragment,
   TransactionUpdateDocument,
+  TransactionUpdateWithPolicyDocument,
 } from "@/generated/graphql";
 import { appContextContainer } from "@/lib/app-context";
 import { BaseError } from "@/lib/errors";
@@ -21,6 +22,18 @@ import { loggerContext } from "@/lib/logger-context";
 import { mapWithConcurrency } from "@/lib/map-with-concurrency";
 import { saleorApp } from "@/lib/saleor-app";
 import { AppConfigRepo } from "@/modules/app-config/repositories/app-config-repo";
+import { PaymentFeeGateConfig } from "@/modules/payment-fee-gate/payment-fee-gate-config";
+import {
+  decideInitializePolicy,
+  PAYMENT_POLICY_TRANSACTION_METADATA_KEY,
+  paymentIntentHasPolicy,
+  PaymentMethodPolicy,
+  readPaymentIntentPolicy,
+} from "@/modules/payment-fee-gate/payment-method-policy";
+import {
+  PaymentFeeCheckout,
+  verifyPaymentFee,
+} from "@/modules/payment-fee-gate/verify-payment-fee";
 import { ResolvedTransactionFlow } from "@/modules/resolved-transaction-flow";
 import {
   CheckoutAmountDueErrors,
@@ -28,6 +41,9 @@ import {
 } from "@/modules/saleor/checkout-amount-due";
 import { checkoutLogRef } from "@/modules/saleor/checkout-log-ref";
 import {
+  CheckoutPaymentState,
+  CheckoutPaymentStateFetcherErrors,
+  CheckoutPaymentStateLine,
   CheckoutPaymentStateTransaction,
   ICheckoutPaymentStateFetcher,
 } from "@/modules/saleor/checkout-payment-state-fetcher";
@@ -86,6 +102,12 @@ import {
   PaymentInFlightError,
   PaymentPendingError,
 } from "./payment-amount-errors";
+import {
+  PaymentFeePresentError,
+  PaymentFeeRequiredError,
+  PaymentFeeStaleError,
+  PaymentMethodRefusal,
+} from "./payment-method-errors";
 import { resolvePaymentMethodFromEventData } from "./payment-method-resolver";
 import {
   TransactionInitializeSessionUseCaseResponses,
@@ -100,10 +122,18 @@ type UseCaseExecuteResult = Result<
 /**
  * The amount this transaction may charge, decided before any Stripe write (NR-31).
  * `checkoutTransactions` is null for an Order source, whose amount is not verified.
+ * `paymentFeeCheckout` is the checkout total and lines of the same read, for the PayPal-fee gate
+ * (A3c); null with the gate off and for an Order source.
  */
 type ChargeAmount = {
   stripeMoney: StripeMoney;
   checkoutTransactions: ReadonlyArray<CheckoutPaymentStateTransaction> | null;
+  paymentFeeCheckout: PaymentFeeCheckout | null;
+};
+
+/** The checkout as read for the amount: with its lines when the PayPal-fee gate is on. */
+type CheckoutReadForAmount = CheckoutPaymentState & {
+  readonly lines?: ReadonlyArray<CheckoutPaymentStateLine>;
 };
 
 type ChargeAmountRefusal = MalformedRequestResponse | BrokenAppResponse | PaymentAmountRefusal;
@@ -155,6 +185,7 @@ export class TransactionInitializeSessionUseCase {
   private transactionRecorder: TransactionRecorderRepo;
   private apl: Pick<APL, "get">;
   private checkoutPaymentStateFetcherFactory: (authData: AuthData) => ICheckoutPaymentStateFetcher;
+  private paymentFeeGate: PaymentFeeGateConfig | null;
 
   constructor(deps: {
     appConfigRepo: AppConfigRepo;
@@ -162,12 +193,18 @@ export class TransactionInitializeSessionUseCase {
     transactionRecorder: TransactionRecorderRepo;
     apl: Pick<APL, "get">;
     checkoutPaymentStateFetcherFactory: (authData: AuthData) => ICheckoutPaymentStateFetcher;
+    /**
+     * PayPal-fee hard gate (A3c, docs/plans/2026-10-22-paypal-fee-gate-design.md). Absent or
+     * null: the gate is off and every path below is today's.
+     */
+    paymentFeeGate?: PaymentFeeGateConfig | null;
   }) {
     this.appConfigRepo = deps.appConfigRepo;
     this.stripePaymentIntentsApiFactory = deps.stripePaymentIntentsApiFactory;
     this.transactionRecorder = deps.transactionRecorder;
     this.apl = deps.apl;
     this.checkoutPaymentStateFetcherFactory = deps.checkoutPaymentStateFetcherFactory;
+    this.paymentFeeGate = deps.paymentFeeGate ?? null;
   }
 
   private prepareStripeCreatePaymentIntentParams(args: {
@@ -176,7 +213,12 @@ export class TransactionInitializeSessionUseCase {
     stripeMoney: StripeMoney;
     selectedPaymentMethodOptions: Stripe.PaymentIntentCreateParams.PaymentMethodOptions;
     idempotencyKey: string;
+    policy: PaymentMethodPolicy | null;
   }): CreatePaymentIntentArgs {
+    if (args.policy) {
+      return this.preparePolicyCreatePaymentIntentParams({ ...args, policy: args.policy });
+    }
+
     return {
       metadata: {
         saleor_source_id: args.event.sourceObject.id,
@@ -198,6 +240,189 @@ export class TransactionInitializeSessionUseCase {
         },
       },
     };
+  }
+
+  /**
+   * PayPal-fee gate on (A3c §2d). Stripe refuses `apple_pay`, `google_pay` and `link` in an
+   * exclusion list, and refuses `payment_method_types` next to `automatic_payment_methods`
+   * (S0), so:
+   * - paypal-only: the allow-list `payment_method_types: ["paypal"]`, nothing automatic;
+   * - no-paypal: every method configured in the Stripe Dashboard except PayPal.
+   * The policy is also written to the metadata, which /api/update-payment-intent and the reuse
+   * checks read together with these live fields.
+   */
+  private preparePolicyCreatePaymentIntentParams(args: {
+    event: TransactionInitializeSessionEventFragment;
+    stripeMoney: StripeMoney;
+    selectedPaymentMethodOptions: Stripe.PaymentIntentCreateParams.PaymentMethodOptions;
+    idempotencyKey: string;
+    policy: PaymentMethodPolicy;
+  }): CreatePaymentIntentArgs {
+    const metadata = {
+      saleor_source_id: args.event.sourceObject.id,
+      saleor_source_type: args.event.sourceObject.__typename,
+      saleor_transaction_id: createSaleorTransactionId(args.event.transaction.id),
+      saleor_payment_policy: args.policy,
+    };
+
+    if (args.policy === "paypal-only") {
+      return {
+        metadata,
+        stripeMoney: args.stripeMoney,
+        idempotencyKey: args.idempotencyKey,
+        intentParams: {
+          payment_method_types: ["paypal"],
+          payment_method_options: {
+            ...args.selectedPaymentMethodOptions,
+          },
+        },
+      };
+    }
+
+    return {
+      metadata,
+      stripeMoney: args.stripeMoney,
+      idempotencyKey: args.idempotencyKey,
+      intentParams: {
+        automatic_payment_methods: {
+          enabled: true,
+        },
+        excluded_payment_method_types: ["paypal"],
+        payment_method_options: {
+          ...args.selectedPaymentMethodOptions,
+        },
+      },
+    };
+  }
+
+  /** True when the gate is off, or when the PaymentIntent already has the policy required. */
+  private hasPolicy(paymentIntent: Stripe.PaymentIntent, policy: PaymentMethodPolicy | null) {
+    return policy === null || paymentIntentHasPolicy(paymentIntent, policy);
+  }
+
+  /**
+   * PayPal-fee gate (A3c §2b): which payment methods the PaymentIntent may offer, decided from
+   * the shopper's choice (`data.paymentIntent.paymentMethod`) and the fee line of the checkout
+   * read for the amount, before any Stripe call. Null when the gate is off.
+   *
+   * A forged PayPal choice without a valid fee is refused rather than turned into no-paypal:
+   * the real storefront gets a code to recover from (refetch, re-apply the fee).
+   */
+  private decidePaymentMethodPolicy(args: {
+    event: TransactionInitializeSessionEventFragment;
+    paymentMethod: string;
+    paymentFeeCheckout: PaymentFeeCheckout | null;
+  }): Result<PaymentMethodPolicy | null, PaymentMethodRefusal> {
+    const gate = this.paymentFeeGate;
+
+    if (!gate) {
+      return ok(null);
+    }
+
+    // An Order source has no checkout lines to verify: PayPal is refused, the rest is no-paypal.
+    const paymentFee = args.paymentFeeCheckout
+      ? verifyPaymentFee(args.paymentFeeCheckout, gate)
+      : null;
+    const decision = decideInitializePolicy({ paymentMethod: args.paymentMethod, paymentFee });
+    const logAttributes = {
+      sourceType: args.event.sourceObject.__typename,
+      sourceRef: checkoutLogRef(args.event.sourceObject.id),
+      paymentMethod: args.paymentMethod,
+      paymentFee,
+    };
+
+    if (decision.outcome === "allowed") {
+      this.logger.info("PayPal-fee gate: payment methods decided for the PaymentIntent", {
+        ...logAttributes,
+        policy: decision.policy,
+      });
+
+      return ok(decision.policy);
+    }
+
+    this.logger.warn("PayPal-fee gate: the payment method chosen does not match the fee line", {
+      ...logAttributes,
+      cause: decision.cause,
+    });
+
+    switch (decision.cause) {
+      case "fee-required":
+        return err(
+          new PaymentFeeRequiredError(
+            paymentFee
+              ? "PayPal chosen without a PayPal fee line on the checkout"
+              : "PayPal chosen for an order: no fee line can be verified",
+          ),
+        );
+      case "fee-stale":
+        return err(
+          new PaymentFeeStaleError(
+            "PayPal chosen with a PayPal fee line that is not the expected fee",
+          ),
+        );
+      case "fee-present":
+        return err(
+          new PaymentFeePresentError("A PayPal fee line is on the checkout and PayPal was not chosen"),
+        );
+    }
+  }
+
+  /**
+   * PayPal-fee gate (A3c §6.3): tags the Saleor transaction with its PaymentIntent's policy
+   * (public metadata `stripe_payment_policy`) for the stuck-payment alert. Best effort: the
+   * PaymentIntent is already created and linked, so a failure is logged as an error (the alert
+   * reports untagged Stripe transactions) and the payment goes on.
+   */
+  private async tagTransactionWithPolicy(args: {
+    transactionId: string;
+    saleorApiUrl: SaleorApiUrl;
+    policy: PaymentMethodPolicy;
+  }): Promise<void> {
+    try {
+      const authData = await saleorApp.apl.get(args.saleorApiUrl);
+
+      if (!authData) {
+        this.logger.error("No auth data found for saleorApiUrl; transaction not tagged", {
+          saleorApiUrl: args.saleorApiUrl,
+        });
+
+        return;
+      }
+
+      const client = createInstrumentedGraphqlClient({
+        saleorApiUrl: args.saleorApiUrl,
+        token: authData.token,
+      });
+
+      const result = await client.mutation(TransactionUpdateWithPolicyDocument, {
+        transactionId: args.transactionId,
+        metadata: [{ key: PAYMENT_POLICY_TRANSACTION_METADATA_KEY, value: args.policy }],
+      });
+
+      const mutationErrors = result.data?.transactionUpdate?.errors ?? [];
+
+      if (result.error || mutationErrors.length > 0) {
+        this.logger.error("Failed to tag the transaction with its payment-method policy", {
+          transactionId: args.transactionId,
+          policy: args.policy,
+          errors: mutationErrors,
+          graphqlError: result.error,
+        });
+
+        return;
+      }
+
+      this.logger.debug("Tagged the transaction with its payment-method policy", {
+        transactionId: args.transactionId,
+        policy: args.policy,
+      });
+    } catch (error) {
+      this.logger.error("Exception while tagging the transaction with its payment-method policy", {
+        error,
+        transactionId: args.transactionId,
+        policy: args.policy,
+      });
+    }
   }
 
   private mapStripePaymentIntentToWebhookResponse(
@@ -254,7 +479,7 @@ export class TransactionInitializeSessionUseCase {
   }
 
   private refusedResponse(
-    error: PaymentAmountRefusal,
+    error: PaymentAmountRefusal | PaymentMethodRefusal,
     transactionFlow: ResolvedTransactionFlow,
   ): InstanceType<typeof TransactionInitializeSessionUseCaseResponses.Failure> {
     return new TransactionInitializeSessionUseCaseResponses.Failure({
@@ -313,7 +538,7 @@ export class TransactionInitializeSessionUseCase {
         { requestedAmount: requested.amount, currency: requested.currency },
       );
 
-      return ok({ stripeMoney: requested, checkoutTransactions: null });
+      return ok({ stripeMoney: requested, checkoutTransactions: null, paymentFeeCheckout: null });
     }
 
     const checkoutId = event.sourceObject.id;
@@ -334,9 +559,14 @@ export class TransactionInitializeSessionUseCase {
       );
     }
 
-    const checkoutResult = await this.checkoutPaymentStateFetcherFactory(
-      authData,
-    ).fetchCheckoutPaymentState({ checkoutId });
+    const fetcher = this.checkoutPaymentStateFetcherFactory(authData);
+    // PayPal-fee gate on: the same query plus the lines, so the fee is checked on this snapshot.
+    const checkoutResult: Result<
+      CheckoutReadForAmount | null,
+      InstanceType<typeof CheckoutPaymentStateFetcherErrors.FetchError>
+    > = this.paymentFeeGate
+      ? await fetcher.fetchCheckoutPaymentState({ checkoutId, includeLines: true })
+      : await fetcher.fetchCheckoutPaymentState({ checkoutId });
 
     if (checkoutResult.isErr()) {
       this.logger.error(
@@ -428,7 +658,27 @@ export class TransactionInitializeSessionUseCase {
       );
     }
 
-    return ok({ stripeMoney: due.stripeMoney, checkoutTransactions: checkout.transactions ?? [] });
+    if (this.paymentFeeGate && !checkout.lines) {
+      this.logger.error(
+        "Saleor returned the checkout without its lines; cannot verify the PayPal fee",
+        { checkoutRef },
+      );
+
+      return err(
+        new BrokenAppResponse(
+          appContextContainer.getContextValue(),
+          new BaseError("Checkout lines missing from the Saleor response"),
+        ),
+      );
+    }
+
+    return ok({
+      stripeMoney: due.stripeMoney,
+      checkoutTransactions: checkout.transactions ?? [],
+      paymentFeeCheckout: checkout.lines
+        ? { totalPrice: checkout.totalPrice, lines: checkout.lines }
+        : null,
+    });
   }
 
   private belongsToSource(
@@ -492,8 +742,9 @@ export class TransactionInitializeSessionUseCase {
     event: TransactionInitializeSessionEventFragment;
     stripeMoney: StripeMoney;
     checkoutTransactions: ChargeAmount["checkoutTransactions"];
+    policy: PaymentMethodPolicy | null;
   }): Promise<StorefrontPaymentIntentOutcome> {
-    const { stripePaymentIntentsApi, event, stripeMoney, checkoutTransactions } = args;
+    const { stripePaymentIntentsApi, event, stripeMoney, checkoutTransactions, policy } = args;
     const paymentIntentId = createStripePaymentIntentId(args.existingPaymentIntentId);
 
     const retrieved = await stripePaymentIntentsApi.getPaymentIntent({ id: paymentIntentId });
@@ -547,6 +798,20 @@ export class TransactionInitializeSessionUseCase {
         paymentIntentId,
         status: paymentIntent.status,
       });
+
+      return { outcome: "not-usable" };
+    }
+
+    /*
+     * PayPal-fee gate (A3c §2d, §3): a PaymentIntent cannot switch payment methods, so one with
+     * another policy (or none: created before the gate) is not reused. The create path below
+     * cancels it with the checkout's other PaymentIntents and creates one with the policy.
+     */
+    if (!this.hasPolicy(paymentIntent, policy)) {
+      this.logger.info(
+        "The storefront's PaymentIntent offers other payment methods than chosen; replacing it",
+        { paymentIntentId, policy, found: readPaymentIntentPolicy(paymentIntent) },
+      );
 
       return { outcome: "not-usable" };
     }
@@ -839,8 +1104,9 @@ export class TransactionInitializeSessionUseCase {
     event: TransactionInitializeSessionEventFragment;
     stripeMoney: StripeMoney;
     checkoutTransactions: ChargeAmount["checkoutTransactions"];
+    policy: PaymentMethodPolicy | null;
   }): Promise<FoundPaymentIntentDecision> {
-    const { stripePaymentIntentsApi, id, event, stripeMoney, checkoutTransactions } = args;
+    const { stripePaymentIntentsApi, id, event, stripeMoney, checkoutTransactions, policy } = args;
 
     const live = await stripePaymentIntentsApi.getPaymentIntent({ id });
 
@@ -890,6 +1156,16 @@ export class TransactionInitializeSessionUseCase {
         paymentIntentId: id,
         status: paymentIntent.status,
       });
+
+      return { decision: "create" };
+    }
+
+    // PayPal-fee gate (A3c §2d): the policy is judged on the live object too.
+    if (!this.hasPolicy(paymentIntent, policy)) {
+      this.logger.info(
+        "The PaymentIntent found for the checkout offers other payment methods than chosen",
+        { paymentIntentId: id, policy, found: readPaymentIntentPolicy(paymentIntent) },
+      );
 
       return { decision: "create" };
     }
@@ -1086,7 +1362,20 @@ export class TransactionInitializeSessionUseCase {
       return ok(this.refusedResponse(refusal, resolvedTransactionFlow));
     }
 
-    const { stripeMoney, checkoutTransactions } = chargeAmountResult.value;
+    const { stripeMoney, checkoutTransactions, paymentFeeCheckout } = chargeAmountResult.value;
+
+    // PayPal-fee gate (A3c §2b): the PaymentIntent's payment methods, before any Stripe call.
+    const policyResult = this.decidePaymentMethodPolicy({
+      event,
+      paymentMethod: selectedPaymentMethod.type,
+      paymentFeeCheckout,
+    });
+
+    if (policyResult.isErr()) {
+      return ok(this.refusedResponse(policyResult.error, resolvedTransactionFlow));
+    }
+
+    const policy = policyResult.value;
 
     // Check if storefront passed an existing PaymentIntent ID to update
     // This avoids Stripe's search API latency when the checkout amount changes
@@ -1103,6 +1392,7 @@ export class TransactionInitializeSessionUseCase {
         event,
         stripeMoney,
         checkoutTransactions,
+        policy,
       });
 
       if (storefrontPaymentIntent.outcome === "refused") {
@@ -1172,6 +1462,15 @@ export class TransactionInitializeSessionUseCase {
                 updateTransactionResult.error,
               ),
             );
+          }
+
+          // PayPal-fee gate (A3c §6.3): tag the Saleor transaction for the stuck-payment alert.
+          if (policy) {
+            await this.tagTransactionWithPolicy({
+              transactionId: event.transaction.id,
+              saleorApiUrl: args.saleorApiUrl,
+              policy,
+            });
           }
 
           const transactionResult = this.resolveOkTransactionResult({
@@ -1254,7 +1553,9 @@ export class TransactionInitializeSessionUseCase {
         (pi) =>
           pi.amount === stripeMoney.amount &&
           pi.currency === stripeMoney.currency &&
-          pi.status === "requires_payment_method",
+          pi.status === "requires_payment_method" &&
+          // PayPal-fee gate (A3c §2d): only one that already has the policy.
+          this.hasPolicy(pi, policy),
       );
 
       if (reusablePI) {
@@ -1283,6 +1584,7 @@ export class TransactionInitializeSessionUseCase {
           event,
           stripeMoney,
           checkoutTransactions,
+          policy,
         });
 
         if (found.decision === "refused") {
@@ -1353,6 +1655,15 @@ export class TransactionInitializeSessionUseCase {
               );
             }
 
+            // PayPal-fee gate (A3c §6.3): tag the Saleor transaction for the stuck-payment alert.
+            if (policy) {
+              await this.tagTransactionWithPolicy({
+                transactionId: event.transaction.id,
+                saleorApiUrl: args.saleorApiUrl,
+                policy,
+              });
+            }
+
             const transactionResult = this.resolveOkTransactionResult({
               transactionFlow: resolvedTransactionFlow,
               stripeStatus,
@@ -1380,7 +1691,9 @@ export class TransactionInitializeSessionUseCase {
           (pi) =>
             !notUpdatable.has(pi.id) &&
             pi.status === "requires_payment_method" &&
-            pi.currency === stripeMoney.currency,
+            pi.currency === stripeMoney.currency &&
+            // PayPal-fee gate (A3c §2d): the policy is set at creation and never changes.
+            this.hasPolicy(pi, policy),
         );
 
       if (updatablePI) {
@@ -1488,6 +1801,15 @@ export class TransactionInitializeSessionUseCase {
               );
             }
 
+            // PayPal-fee gate (A3c §6.3): tag the Saleor transaction for the stuck-payment alert.
+            if (policy) {
+              await this.tagTransactionWithPolicy({
+                transactionId: event.transaction.id,
+                saleorApiUrl: args.saleorApiUrl,
+                policy,
+              });
+            }
+
             const transactionResult = this.resolveOkTransactionResult({
               transactionFlow: resolvedTransactionFlow,
               stripeStatus,
@@ -1537,6 +1859,7 @@ export class TransactionInitializeSessionUseCase {
       selectedPaymentMethodOptions:
         selectedPaymentMethod.getCreatePaymentIntentMethodOptions(saleorTransactionFlow),
       idempotencyKey: event.idempotencyKey,
+      policy,
     });
 
     const createPaymentIntentResult =
@@ -1629,6 +1952,15 @@ export class TransactionInitializeSessionUseCase {
       return err(
         new BrokenAppResponse(appContextContainer.getContextValue(), updateTransactionResult.error),
       );
+    }
+
+    // PayPal-fee gate (A3c §6.3): tag the Saleor transaction for the stuck-payment alert.
+    if (policy) {
+      await this.tagTransactionWithPolicy({
+        transactionId: event.transaction.id,
+        saleorApiUrl: args.saleorApiUrl,
+        policy,
+      });
     }
 
     const transactionResult = this.resolveOkTransactionResult({

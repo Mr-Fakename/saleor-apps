@@ -7,12 +7,14 @@ import {
   UnhandledErrorResponse,
 } from "@/app/api/webhooks/saleor/saleor-webhook-responses";
 import { appContextContainer } from "@/lib/app-context";
+import { env } from "@/lib/env";
 import { BaseError } from "@/lib/errors";
 import { createLogger } from "@/lib/logger";
 import { withLoggerContext } from "@/lib/logger-context";
 import { setObservabilitySaleorApiUrl } from "@/lib/observability-saleor-api-url";
 import { setObservabilitySourceObjectId } from "@/lib/observability-source-object-id";
 import { appConfigRepoImpl } from "@/modules/app-config/repositories/app-config-repo-impl";
+import { paymentFeeGateFromEnv } from "@/modules/payment-fee-gate/payment-fee-gate-config";
 import { createSaleorApiUrl } from "@/modules/saleor/saleor-api-url";
 
 import { withRecipientVerification } from "../with-recipient-verification";
@@ -22,6 +24,8 @@ import { paymentGatewayInitializeSessionWebhookDefinition } from "./webhook-defi
 
 const useCase = new PaymentGatewayInitializeSessionUseCase({
   appConfigRepo: appConfigRepoImpl,
+  // PayPal-fee hard gate (A3c): from PAYMENT_FEE_GATE & co, validated when env.ts loaded.
+  paymentFeeGate: paymentFeeGateFromEnv(env),
 });
 
 const logger = createLogger("PAYMENT_GATEWAY_INITIALIZE_SESSION route");

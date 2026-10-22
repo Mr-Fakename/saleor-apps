@@ -1,0 +1,74 @@
+# PayPal-fee gate (A3c): FetchCheckoutPaymentState plus the checkout lines, so the fee line is
+# verified against the same snapshot the charge amount comes from. Used only when the gate is
+# on; with the gate off the app sends FetchCheckoutPaymentState, unchanged.
+query FetchCheckoutPaymentStateWithLines($checkoutId: ID!) {
+  checkout(id: $checkoutId) {
+    id
+    channel {
+      id
+    }
+    totalPrice {
+      gross {
+        amount
+        currency
+      }
+    }
+    transactions {
+      id
+      pspReference
+      chargedAmount {
+        amount
+        currency
+      }
+      authorizedAmount {
+        amount
+        currency
+      }
+      chargePendingAmount {
+        amount
+        currency
+      }
+      authorizePendingAmount {
+        amount
+        currency
+      }
+      refundedAmount {
+        amount
+        currency
+      }
+      refundPendingAmount {
+        amount
+        currency
+      }
+      canceledAmount {
+        amount
+        currency
+      }
+      cancelPendingAmount {
+        amount
+        currency
+      }
+      events {
+        type
+      }
+    }
+    # Public line metadata (readable without permissions): the fee marker key.
+    lines {
+      id
+      quantity
+      variant {
+        id
+      }
+      metadata {
+        key
+        value
+      }
+      totalPrice {
+        gross {
+          amount
+          currency
+        }
+      }
+    }
+  }
+}

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { fromError } from "zod-validation-error";
 
 import { BaseError } from "@/lib/errors";
+import { parsePaymentFeeGateEnv } from "@/modules/payment-fee-gate/payment-fee-gate-config";
 
 // https://env.t3.gg/docs/recipes#booleans
 const booleanSchema = z
@@ -41,6 +42,14 @@ export const env = createEnv({
      * Unset = none: the storefronts call it server-to-server through their own proxy.
      */
     UPDATE_PAYMENT_INTENT_ALLOWED_ORIGINS: z.string().optional(),
+    /**
+     * PayPal-fee hard gate (A3c): "paypal" turns it on; unset or empty = off. The four
+     * variables are checked together below. See src/modules/payment-fee-gate/.
+     */
+    PAYMENT_FEE_GATE: z.string().optional(),
+    PAYMENT_FEE_RATE_PERCENT: z.string().optional(),
+    PAYMENT_FEE_VARIANT_ID: z.string().optional(),
+    PAYMENT_FEE_METADATA_KEY: z.string().optional(),
   },
   shared: {
     NODE_ENV: z.enum(["development", "production", "test"]).optional().default("development"),
@@ -73,6 +82,10 @@ export const env = createEnv({
     APPSTORE_URL: process.env.APPSTORE_URL,
     APP_NAME: process.env.APP_NAME,
     UPDATE_PAYMENT_INTENT_ALLOWED_ORIGINS: process.env.UPDATE_PAYMENT_INTENT_ALLOWED_ORIGINS,
+    PAYMENT_FEE_GATE: process.env.PAYMENT_FEE_GATE,
+    PAYMENT_FEE_RATE_PERCENT: process.env.PAYMENT_FEE_RATE_PERCENT,
+    PAYMENT_FEE_VARIANT_ID: process.env.PAYMENT_FEE_VARIANT_ID,
+    PAYMENT_FEE_METADATA_KEY: process.env.PAYMENT_FEE_METADATA_KEY,
   },
   isServer: typeof window === "undefined" || process.env.NODE_ENV === "test",
   onValidationError(issues) {
@@ -85,3 +98,22 @@ export const env = createEnv({
     });
   },
 });
+
+/*
+ * PayPal-fee hard gate (A3c §4): with PAYMENT_FEE_GATE=paypal, an invalid or missing rate or
+ * variant stops the app here, when this module loads (every route imports it, including the
+ * /api/manifest healthcheck), instead of serving PayPal with a fee it cannot verify. Server
+ * only: in the browser (sentry.client.config.ts) the server variables are not readable.
+ */
+if (typeof window === "undefined" || process.env.NODE_ENV === "test") {
+  const paymentFeeGate = parsePaymentFeeGateEnv({
+    PAYMENT_FEE_GATE: env.PAYMENT_FEE_GATE,
+    PAYMENT_FEE_RATE_PERCENT: env.PAYMENT_FEE_RATE_PERCENT,
+    PAYMENT_FEE_VARIANT_ID: env.PAYMENT_FEE_VARIANT_ID,
+    PAYMENT_FEE_METADATA_KEY: env.PAYMENT_FEE_METADATA_KEY,
+  });
+
+  if (paymentFeeGate.isErr()) {
+    throw paymentFeeGate.error;
+  }
+}

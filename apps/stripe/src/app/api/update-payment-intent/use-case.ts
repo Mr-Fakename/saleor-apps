@@ -1,15 +1,27 @@
 import { APL, AuthData } from "@saleor/app-sdk/APL";
 import { err, ok, Result } from "neverthrow";
+import Stripe from "stripe";
 import { z } from "zod";
 
 import { BaseError } from "@/lib/errors";
 import { createLogger } from "@/lib/logger";
 import { AppConfigRepo } from "@/modules/app-config/repositories/app-config-repo";
+import { PaymentFeeGateConfig } from "@/modules/payment-fee-gate/payment-fee-gate-config";
+import {
+  decideUpdatePolicy,
+  PaymentPolicyRefusalCode,
+  readPaymentIntentPolicy,
+} from "@/modules/payment-fee-gate/payment-method-policy";
+import { verifyPaymentFee } from "@/modules/payment-fee-gate/verify-payment-fee";
 import {
   CheckoutAmountDueErrors,
   resolveCheckoutAmountDue,
 } from "@/modules/saleor/checkout-amount-due";
+import { checkoutLogRef } from "@/modules/saleor/checkout-log-ref";
 import {
+  CheckoutPaymentState,
+  CheckoutPaymentStateFetcherErrors,
+  CheckoutPaymentStateLine,
   CheckoutPaymentStateTransaction,
   ICheckoutPaymentStateFetcher,
 } from "@/modules/saleor/checkout-payment-state-fetcher";
@@ -37,6 +49,11 @@ export const updatePaymentIntentRequestSchema = z.object({
 });
 
 export type UpdatePaymentIntentRequest = z.infer<typeof updatePaymentIntentRequestSchema>;
+
+/** The checkout as read for the update: with its lines when the PayPal-fee gate is on. */
+type CheckoutReadForUpdate = CheckoutPaymentState & {
+  readonly lines?: ReadonlyArray<CheckoutPaymentStateLine>;
+};
 
 export type UpdatePaymentIntentSuccess = {
   paymentIntentId: string;
@@ -87,6 +104,33 @@ const ConflictError = BaseError.subclass("UpdatePaymentIntent.ConflictError", {
   },
 });
 
+/**
+ * PayPal-fee gate (A3c §1c, §2c): the PaymentIntent's payment-method policy and the checkout's
+ * fee line disagree. A 409 whose body carries `code`, which the storefront proxies pass through:
+ * - PAYMENT_FEE_REQUIRED: PayPal-only PaymentIntent, no fee line (re-apply the fee);
+ * - PAYMENT_FEE_STALE: PayPal-only PaymentIntent, a fee line that is not the expected fee;
+ * - PAYMENT_FEE_PRESENT: no-PayPal PaymentIntent, a fee line on the checkout;
+ * - PAYMENT_POLICY_REINIT: a PaymentIntent without a trusted policy (created before the gate):
+ *   start a new one with transactionInitialize.
+ * The amount is never written in these cases.
+ */
+const PaymentPolicyConflictError = ConflictError.subclass(
+  "UpdatePaymentIntent.PaymentPolicyConflictError",
+  {
+    props: {
+      _internalName: "UpdatePaymentIntent.PaymentPolicyConflictError" as const,
+      code: "PAYMENT_POLICY_REINIT" as PaymentPolicyRefusalCode,
+    },
+  },
+);
+
+const PAYMENT_POLICY_PUBLIC_MESSAGES: Record<PaymentPolicyRefusalCode, string> = {
+  PAYMENT_FEE_REQUIRED: "The PayPal fee is missing from the checkout",
+  PAYMENT_FEE_STALE: "The PayPal fee on the checkout is out of date",
+  PAYMENT_FEE_PRESENT: "The checkout holds a PayPal fee that this payment cannot take",
+  PAYMENT_POLICY_REINIT: "Payment intent must be created again",
+};
+
 const InternalError = BaseError.subclass("UpdatePaymentIntent.InternalError", {
   props: {
     _internalName: "UpdatePaymentIntent.InternalError" as const,
@@ -109,6 +153,7 @@ export const UpdatePaymentIntentErrors = {
   ForbiddenError,
   NotFoundError,
   ConflictError,
+  PaymentPolicyConflictError,
   InternalError,
   UpstreamError,
 };
@@ -119,6 +164,7 @@ export type UpdatePaymentIntentError = InstanceType<
   | typeof ForbiddenError
   | typeof NotFoundError
   | typeof ConflictError
+  | typeof PaymentPolicyConflictError
   | typeof InternalError
   | typeof UpstreamError
 >;
@@ -147,17 +193,74 @@ export class UpdatePaymentIntentAmountUseCase {
   private appConfigRepo: AppConfigRepo;
   private stripePaymentIntentsApiFactory: IStripePaymentIntentsApiFactory;
   private checkoutPaymentStateFetcherFactory: (authData: AuthData) => ICheckoutPaymentStateFetcher;
+  private paymentFeeGate: PaymentFeeGateConfig | null;
 
   constructor(deps: {
     apl: Pick<APL, "get">;
     appConfigRepo: AppConfigRepo;
     stripePaymentIntentsApiFactory: IStripePaymentIntentsApiFactory;
     checkoutPaymentStateFetcherFactory: (authData: AuthData) => ICheckoutPaymentStateFetcher;
+    /** PayPal-fee hard gate (A3c). Absent or null: the gate is off, today's use case. */
+    paymentFeeGate?: PaymentFeeGateConfig | null;
   }) {
     this.apl = deps.apl;
     this.appConfigRepo = deps.appConfigRepo;
     this.stripePaymentIntentsApiFactory = deps.stripePaymentIntentsApiFactory;
     this.checkoutPaymentStateFetcherFactory = deps.checkoutPaymentStateFetcherFactory;
+    this.paymentFeeGate = deps.paymentFeeGate ?? null;
+  }
+
+  /**
+   * PayPal-fee gate on (A3c §2c): the policy comes from the PaymentIntent (metadata AND live
+   * payment-method fields), the fee state from the checkout read in this request. Null when the
+   * amount may be written.
+   */
+  private checkPaymentMethodPolicy(args: {
+    gate: PaymentFeeGateConfig;
+    paymentIntent: Stripe.PaymentIntent;
+    checkout: CheckoutReadForUpdate;
+    checkoutId: string;
+  }): InstanceType<typeof PaymentPolicyConflictError> | null {
+    const { gate, paymentIntent, checkout } = args;
+
+    if (!checkout.lines) {
+      // Asked for with includeLines; Saleor's `lines` is non-null. Never update unverified.
+      return new PaymentPolicyConflictError("Checkout lines missing from the Saleor response", {
+        props: {
+          code: "PAYMENT_POLICY_REINIT" as const,
+          publicMessage: PAYMENT_POLICY_PUBLIC_MESSAGES.PAYMENT_POLICY_REINIT,
+        },
+      });
+    }
+
+    const paymentIntentPolicy = readPaymentIntentPolicy(paymentIntent);
+    const paymentFee = verifyPaymentFee(
+      { totalPrice: checkout.totalPrice, lines: checkout.lines },
+      gate,
+    );
+    const decision = decideUpdatePolicy({ paymentIntentPolicy, paymentFee });
+
+    if (decision.outcome === "update") {
+      return null;
+    }
+
+    this.logger.warn("PayPal-fee gate: refusing to update the PaymentIntent amount", {
+      paymentIntentId: paymentIntent.id,
+      checkoutRef: checkoutLogRef(args.checkoutId),
+      paymentIntentPolicy,
+      paymentFee,
+      code: decision.code,
+    });
+
+    return new PaymentPolicyConflictError(
+      `PaymentIntent policy and checkout fee disagree: ${decision.code}`,
+      {
+        props: {
+          code: decision.code,
+          publicMessage: PAYMENT_POLICY_PUBLIC_MESSAGES[decision.code],
+        },
+      },
+    );
   }
 
   async execute(
@@ -261,9 +364,14 @@ export class UpdatePaymentIntentAmountUseCase {
       );
     }
 
-    const checkoutResult = await this.checkoutPaymentStateFetcherFactory(
-      authData,
-    ).fetchCheckoutPaymentState({ checkoutId });
+    const fetcher = this.checkoutPaymentStateFetcherFactory(authData);
+    // PayPal-fee gate on: the same query plus the lines, so the fee is checked on this snapshot.
+    const checkoutResult: Result<
+      CheckoutReadForUpdate | null,
+      InstanceType<typeof CheckoutPaymentStateFetcherErrors.FetchError>
+    > = this.paymentFeeGate
+      ? await fetcher.fetchCheckoutPaymentState({ checkoutId, includeLines: true })
+      : await fetcher.fetchCheckoutPaymentState({ checkoutId });
 
     if (checkoutResult.isErr()) {
       return err(
@@ -302,6 +410,19 @@ export class UpdatePaymentIntentAmountUseCase {
       return err(
         new ForbiddenError(`Checkout ${checkoutId} holds no transaction for this PaymentIntent`),
       );
+    }
+
+    if (this.paymentFeeGate) {
+      const policyRefusal = this.checkPaymentMethodPolicy({
+        gate: this.paymentFeeGate,
+        paymentIntent,
+        checkout,
+        checkoutId,
+      });
+
+      if (policyRefusal) {
+        return err(policyRefusal);
+      }
     }
 
     const checkoutTotal = checkout.totalPrice.gross;

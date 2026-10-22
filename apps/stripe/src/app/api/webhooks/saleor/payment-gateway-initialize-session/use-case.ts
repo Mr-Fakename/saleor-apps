@@ -8,6 +8,7 @@ import { appContextContainer } from "@/lib/app-context";
 import { BaseError } from "@/lib/errors";
 import { createLogger } from "@/lib/logger";
 import { AppConfigRepo } from "@/modules/app-config/repositories/app-config-repo";
+import { PaymentFeeGateConfig } from "@/modules/payment-fee-gate/payment-fee-gate-config";
 import { SaleorApiUrl } from "@/modules/saleor/saleor-api-url";
 
 import {
@@ -17,6 +18,7 @@ import {
 
 export class PaymentGatewayInitializeSessionUseCase {
   private appConfigRepo: AppConfigRepo;
+  private paymentFeeGate: PaymentFeeGateConfig | null;
   private logger = createLogger("PaymentGatewayInitializeSessionUseCase");
 
   static UseCaseError = BaseError.subclass("PaymentGatewayInitializeSessionUseCaseError", {
@@ -25,8 +27,13 @@ export class PaymentGatewayInitializeSessionUseCase {
     },
   });
 
-  constructor(deps: { appConfigRepo: AppConfigRepo }) {
+  constructor(deps: {
+    appConfigRepo: AppConfigRepo;
+    /** PayPal-fee hard gate (A3c). Absent or null: nothing is advertised. */
+    paymentFeeGate?: PaymentFeeGateConfig | null;
+  }) {
     this.appConfigRepo = deps.appConfigRepo;
+    this.paymentFeeGate = deps.paymentFeeGate ?? null;
   }
 
   async execute(params: {
@@ -71,6 +78,10 @@ export class PaymentGatewayInitializeSessionUseCase {
         new PaymentGatewayInitializeSessionUseCaseResponses.Success({
           pk,
           appContext: appContextContainer.getContextValue(),
+          // A3c §1b: the capability handshake. This call writes nothing in Stripe.
+          paymentFeeGate: this.paymentFeeGate
+            ? { method: this.paymentFeeGate.method, ratePercent: this.paymentFeeGate.ratePercent }
+            : null,
         }),
       );
     }

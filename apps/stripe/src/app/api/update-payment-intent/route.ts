@@ -5,11 +5,16 @@ import { createInstrumentedGraphqlClient } from "@/lib/graphql-client";
 import { createLogger } from "@/lib/logger";
 import { saleorApp } from "@/lib/saleor-app";
 import { appConfigRepoImpl } from "@/modules/app-config/repositories/app-config-repo-impl";
+import { paymentFeeGateFromEnv } from "@/modules/payment-fee-gate/payment-fee-gate-config";
 import { CheckoutPaymentStateFetcher } from "@/modules/saleor/checkout-payment-state-fetcher";
 import { StripePaymentIntentsApiFactory } from "@/modules/stripe/stripe-payment-intents-api-factory";
 
 import { RequestOriginPolicy } from "./request-origin-policy";
-import { UpdatePaymentIntentAmountUseCase, updatePaymentIntentRequestSchema } from "./use-case";
+import {
+  UpdatePaymentIntentAmountUseCase,
+  UpdatePaymentIntentErrors,
+  updatePaymentIntentRequestSchema,
+} from "./use-case";
 
 const logger = createLogger("update-payment-intent");
 
@@ -27,6 +32,8 @@ const useCase = new UpdatePaymentIntentAmountUseCase({
         token: authData.token,
       }),
     ),
+  // PayPal-fee hard gate (A3c): from PAYMENT_FEE_GATE & co, validated when env.ts loaded.
+  paymentFeeGate: paymentFeeGateFromEnv(env),
 });
 
 const forbiddenOriginResponse = () =>
@@ -125,8 +132,11 @@ export async function POST(req: NextRequest) {
           logger.warn("PaymentIntent amount update refused", logAttributes);
         }
 
+        // A3c §1c: a PayPal-fee gate refusal also carries its `code` (gate on only).
         return Response.json(
-          { error: error.publicMessage },
+          error instanceof UpdatePaymentIntentErrors.PaymentPolicyConflictError
+            ? { error: error.publicMessage, code: error.code }
+            : { error: error.publicMessage },
           { status: error.httpStatus, headers },
         );
       },

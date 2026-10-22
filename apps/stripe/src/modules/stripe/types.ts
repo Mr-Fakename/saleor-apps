@@ -2,6 +2,7 @@ import { Result } from "neverthrow";
 import Stripe from "stripe";
 
 import { BaseError } from "@/lib/errors";
+import { PaymentMethodPolicy } from "@/modules/payment-fee-gate/payment-method-policy";
 import { SaleorTransationId } from "@/modules/saleor/saleor-transaction-id";
 import { StripeWebhookSecret } from "@/modules/stripe/stripe-webhook-secret";
 
@@ -37,6 +38,11 @@ export type AllowedStripeObjectMetadata = {
   saleor_transaction_id?: SaleorTransationId;
   saleor_source_id?: string;
   saleor_source_type?: "Checkout" | "Order";
+  /**
+   * PayPal-fee gate (A3c §2d): the payment methods the PaymentIntent was created with. Set only
+   * with the gate on, at creation; never changed afterwards (a PaymentIntent cannot switch).
+   */
+  saleor_payment_policy?: PaymentMethodPolicy;
 };
 
 export interface CreatePaymentIntentArgs {
@@ -44,6 +50,8 @@ export interface CreatePaymentIntentArgs {
   intentParams: Pick<
     Stripe.PaymentIntentCreateParams,
     | "automatic_payment_methods"
+    | "payment_method_types"
+    | "excluded_payment_method_types"
     | "payment_method_options"
     | "confirm"
     | "payment_method"

@@ -1,0 +1,16 @@
+# PayPal-fee gate (A3c §6.3): tags the Saleor transaction with the payment-method policy of its
+# PaymentIntent (metadata key stripe_payment_policy) for the stuck-payment alert. Sent only when
+# the gate is on, after the unchanged TransactionUpdate (pspReference) mutation. Saleor merges
+# the keys into the transaction's public metadata.
+mutation TransactionUpdateWithPolicy($transactionId: ID!, $metadata: [MetadataInput!]!) {
+  transactionUpdate(id: $transactionId, transaction: { metadata: $metadata }) {
+    errors {
+      message
+      code
+      field
+    }
+    transaction {
+      id
+    }
+  }
+}
