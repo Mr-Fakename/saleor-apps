@@ -600,6 +600,33 @@ describe("decideCapture (A3d)", () => {
         });
       });
     });
+
+    /*
+     * Tax-exempt order (owner decision 2026-10-23: the fee is paid net of VAT). With prices
+     * entered with tax, the exemption charges the lines net, while the order line's own gross
+     * stays the price checkout-prices set (saleor/checkout/complete_checkout.py:344-356).
+     */
+    it("tax-exempt: own 15.00 = the fee on the net base 1000.00, charged 12.50 net, order 1012.50 authorized -> capture", () => {
+      const pi = paymentIntent({ amount: 1012_50, amount_capturable: 1012_50 });
+      const tx = transaction({
+        authorizedAmount: eur(1012.5),
+        order: order({
+          total: { gross: eur(1012.5) },
+          lines: [
+            productLine(1000, { undiscountedTotalPrice: { gross: eur(1200) } }),
+            feeLine(12.5, { undiscountedTotalPrice: { gross: eur(15) } }),
+          ],
+          transactions: [orderTransaction({ authorizedAmount: eur(1012.5) })],
+        }),
+      });
+
+      expect(decide({ paymentIntent: pi, transaction: tx })).toStrictEqual({
+        outcome: "capture",
+        rule: "R13",
+        amount: 1012.5,
+        currency: "EUR",
+      });
+    });
   });
 
   describe("R13 order total = PaymentIntent amount", () => {
