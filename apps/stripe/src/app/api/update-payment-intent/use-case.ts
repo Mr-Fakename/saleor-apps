@@ -7,6 +7,8 @@ import { BaseError } from "@/lib/errors";
 import { createLogger } from "@/lib/logger";
 import { AppConfigRepo } from "@/modules/app-config/repositories/app-config-repo";
 import { PaymentFeeGateConfig } from "@/modules/payment-fee-gate/payment-fee-gate-config";
+import { PaypalCaptureMode } from "@/modules/payment-fee-gate/paypal-capture-config";
+import { paymentIntentMatchesPaypalCaptureMode } from "@/modules/payment-fee-gate/paypal-capture-method";
 import {
   decideUpdatePolicy,
   PaymentPolicyRefusalCode,
@@ -194,6 +196,7 @@ export class UpdatePaymentIntentAmountUseCase {
   private stripePaymentIntentsApiFactory: IStripePaymentIntentsApiFactory;
   private checkoutPaymentStateFetcherFactory: (authData: AuthData) => ICheckoutPaymentStateFetcher;
   private paymentFeeGate: PaymentFeeGateConfig | null;
+  private paypalCapture: PaypalCaptureMode | null;
 
   constructor(deps: {
     apl: Pick<APL, "get">;
@@ -202,12 +205,18 @@ export class UpdatePaymentIntentAmountUseCase {
     checkoutPaymentStateFetcherFactory: (authData: AuthData) => ICheckoutPaymentStateFetcher;
     /** PayPal-fee hard gate (A3c). Absent or null: the gate is off, today's use case. */
     paymentFeeGate?: PaymentFeeGateConfig | null;
+    /**
+     * A3d: with "manual", a paypal-only PaymentIntent created without manual capture is refused
+     * with PAYMENT_POLICY_REINIT (the storefront initializes again). Used only with the gate on.
+     */
+    paypalCapture?: PaypalCaptureMode | null;
   }) {
     this.apl = deps.apl;
     this.appConfigRepo = deps.appConfigRepo;
     this.stripePaymentIntentsApiFactory = deps.stripePaymentIntentsApiFactory;
     this.checkoutPaymentStateFetcherFactory = deps.checkoutPaymentStateFetcherFactory;
     this.paymentFeeGate = deps.paymentFeeGate ?? null;
+    this.paypalCapture = deps.paypalCapture ?? null;
   }
 
   /**
@@ -233,7 +242,19 @@ export class UpdatePaymentIntentAmountUseCase {
       });
     }
 
-    const paymentIntentPolicy = readPaymentIntentPolicy(paymentIntent);
+    const policyReading = readPaymentIntentPolicy(paymentIntent);
+    /*
+     * A3d: a paypal-only PaymentIntent created without manual capture (before the deploy, or
+     * while the kill switch was on) would be captured by Stripe at approval, before the app
+     * checked the order. It is not trusted (REINIT), like a PaymentIntent whose live fields
+     * contradict its tag.
+     */
+    const paymentIntentPolicy =
+      policyReading.kind === "policy" &&
+      policyReading.policy === "paypal-only" &&
+      !paymentIntentMatchesPaypalCaptureMode(paymentIntent, this.paypalCapture)
+        ? { kind: "inconsistent" as const, tagged: policyReading.policy }
+        : policyReading;
     const paymentFee = verifyPaymentFee(
       { totalPrice: checkout.totalPrice, lines: checkout.lines },
       gate,

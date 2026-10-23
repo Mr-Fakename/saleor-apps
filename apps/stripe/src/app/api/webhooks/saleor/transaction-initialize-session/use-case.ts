@@ -23,6 +23,8 @@ import { mapWithConcurrency } from "@/lib/map-with-concurrency";
 import { saleorApp } from "@/lib/saleor-app";
 import { AppConfigRepo } from "@/modules/app-config/repositories/app-config-repo";
 import { PaymentFeeGateConfig } from "@/modules/payment-fee-gate/payment-fee-gate-config";
+import { PaypalCaptureMode } from "@/modules/payment-fee-gate/paypal-capture-config";
+import { paymentIntentMatchesPaypalCaptureMode } from "@/modules/payment-fee-gate/paypal-capture-method";
 import {
   decideInitializePolicy,
   PAYMENT_POLICY_TRANSACTION_METADATA_KEY,
@@ -186,6 +188,7 @@ export class TransactionInitializeSessionUseCase {
   private apl: Pick<APL, "get">;
   private checkoutPaymentStateFetcherFactory: (authData: AuthData) => ICheckoutPaymentStateFetcher;
   private paymentFeeGate: PaymentFeeGateConfig | null;
+  private paypalCapture: PaypalCaptureMode | null;
 
   constructor(deps: {
     appConfigRepo: AppConfigRepo;
@@ -198,6 +201,12 @@ export class TransactionInitializeSessionUseCase {
      * null: the gate is off and every path below is today's.
      */
     paymentFeeGate?: PaymentFeeGateConfig | null;
+    /**
+     * A3d (§9): "manual" makes paypal-only PaymentIntents authorize only; the capture worker
+     * captures them once their order passes its checks. Used only with the gate on. Absent,
+     * null or "automatic" (kill switch): the gate's params before A3d.
+     */
+    paypalCapture?: PaypalCaptureMode | null;
   }) {
     this.appConfigRepo = deps.appConfigRepo;
     this.stripePaymentIntentsApiFactory = deps.stripePaymentIntentsApiFactory;
@@ -205,6 +214,7 @@ export class TransactionInitializeSessionUseCase {
     this.apl = deps.apl;
     this.checkoutPaymentStateFetcherFactory = deps.checkoutPaymentStateFetcherFactory;
     this.paymentFeeGate = deps.paymentFeeGate ?? null;
+    this.paypalCapture = deps.paypalCapture ?? null;
   }
 
   private prepareStripeCreatePaymentIntentParams(args: {
@@ -272,9 +282,21 @@ export class TransactionInitializeSessionUseCase {
         idempotencyKey: args.idempotencyKey,
         intentParams: {
           payment_method_types: ["paypal"],
-          payment_method_options: {
-            ...args.selectedPaymentMethodOptions,
-          },
+          payment_method_options:
+            this.paypalCapture === "manual"
+              ? {
+                  ...args.selectedPaymentMethodOptions,
+                  /*
+                   * A3d: PayPal approval only authorizes. The capture worker captures once the
+                   * Saleor transaction sits on an order whose fee line it verified
+                   * (src/modules/paypal-capture/). Spike S1: the top-level capture_method stays
+                   * automatic_async; this option is what Stripe applies to PayPal.
+                   */
+                  paypal: { ...args.selectedPaymentMethodOptions.paypal, capture_method: "manual" },
+                }
+              : {
+                  ...args.selectedPaymentMethodOptions,
+                },
         },
       };
     }
@@ -295,9 +317,25 @@ export class TransactionInitializeSessionUseCase {
     };
   }
 
-  /** True when the gate is off, or when the PaymentIntent already has the policy required. */
+  /**
+   * True when the gate is off, or when the PaymentIntent already has the policy required. With
+   * A3d manual capture on, a paypal-only PaymentIntent must also be a manual-capture one
+   * (paymentIntentMatchesPaypalCaptureMode): an older one is replaced like any other policy
+   * mismatch (§3), so Stripe never captures a PayPal payment before the app checked its order.
+   */
   private hasPolicy(paymentIntent: Stripe.PaymentIntent, policy: PaymentMethodPolicy | null) {
-    return policy === null || paymentIntentHasPolicy(paymentIntent, policy);
+    if (policy === null) {
+      return true;
+    }
+
+    if (!paymentIntentHasPolicy(paymentIntent, policy)) {
+      return false;
+    }
+
+    return (
+      policy !== "paypal-only" ||
+      paymentIntentMatchesPaypalCaptureMode(paymentIntent, this.paypalCapture)
+    );
   }
 
   /**

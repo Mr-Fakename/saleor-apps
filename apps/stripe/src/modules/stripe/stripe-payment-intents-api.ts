@@ -24,6 +24,17 @@ const TRANSACTION_ACTION_READ_TIMEOUT_MS = 2_500;
 const TRANSACTION_ACTION_WRITE_TIMEOUT_MS = 5_000;
 const TRANSACTION_ACTION_MAX_NETWORK_RETRIES = 0;
 
+/**
+ * A3d sweep (docs/plans/2026-10-22-paypal-fee-gate-design.md §9): paypal-only authorizations
+ * waiting for the app's capture. Stripe's search lags up to about a minute; the worker reads
+ * each PaymentIntent again before it decides anything.
+ */
+export const PAYPAL_AWAITING_APP_CAPTURE_SEARCH_QUERY =
+  'status:"requires_capture" AND metadata["saleor_payment_policy"]:"paypal-only"';
+
+/** 10 pages of 100: far above any real backlog; the next sweep reads the rest. */
+const PAYPAL_AWAITING_APP_CAPTURE_MAX_PAGES = 10;
+
 export class StripePaymentIntentsApi implements IStripePaymentIntentsApi {
   private stripeApiWrapper: Pick<Stripe, "paymentIntents">;
 
@@ -149,6 +160,35 @@ export class StripePaymentIntentsApi implements IStripePaymentIntentsApi {
           maxNetworkRetries: TRANSACTION_ACTION_MAX_NETWORK_RETRIES,
         },
       ),
+      (error) => error,
+    );
+  }
+
+  /** A3d sweep: see PAYPAL_AWAITING_APP_CAPTURE_SEARCH_QUERY. */
+  async searchPaymentIntentsAwaitingAppCapture(): Promise<Result<Stripe.PaymentIntent[], unknown>> {
+    return ResultAsync.fromPromise(
+      (async () => {
+        const found: Stripe.PaymentIntent[] = [];
+        let page: string | undefined;
+
+        for (let pageNumber = 0; pageNumber < PAYPAL_AWAITING_APP_CAPTURE_MAX_PAGES; pageNumber += 1) {
+          const response = await this.stripeApiWrapper.paymentIntents.search({
+            query: PAYPAL_AWAITING_APP_CAPTURE_SEARCH_QUERY,
+            limit: 100,
+            ...(page ? { page } : {}),
+          });
+
+          found.push(...response.data);
+
+          if (!response.has_more || !response.next_page) {
+            break;
+          }
+
+          page = response.next_page;
+        }
+
+        return found;
+      })(),
       (error) => error,
     );
   }

@@ -18,6 +18,7 @@ import { setObservabilitySourceObjectId } from "@/lib/observability-source-objec
 import { saleorApp } from "@/lib/saleor-app";
 import { appConfigRepoImpl } from "@/modules/app-config/repositories/app-config-repo-impl";
 import { paymentFeeGateFromEnv } from "@/modules/payment-fee-gate/payment-fee-gate-config";
+import { paypalCaptureFromEnv } from "@/modules/payment-fee-gate/paypal-capture-config";
 import { CheckoutPaymentStateFetcher } from "@/modules/saleor/checkout-payment-state-fetcher";
 import { createSaleorApiUrl } from "@/modules/saleor/saleor-api-url";
 import { StripePaymentIntentsApiFactory } from "@/modules/stripe/stripe-payment-intents-api-factory";
@@ -44,6 +45,8 @@ const useCase = new TransactionInitializeSessionUseCase({
     ),
   // PayPal-fee hard gate (A3c): from PAYMENT_FEE_GATE & co, validated when env.ts loaded.
   paymentFeeGate: paymentFeeGateFromEnv(env),
+  // A3d: PAYMENT_FEE_PAYPAL_CAPTURE ("manual" by default with the gate on; null with it off).
+  paypalCapture: paypalCaptureFromEnv(env),
 });
 
 const logger = createLogger("TRANSACTION_INITIALIZE_SESSION route");

@@ -4,6 +4,7 @@ import { fromError } from "zod-validation-error";
 
 import { BaseError } from "@/lib/errors";
 import { parsePaymentFeeGateEnv } from "@/modules/payment-fee-gate/payment-fee-gate-config";
+import { parsePaypalCaptureEnv } from "@/modules/payment-fee-gate/paypal-capture-config";
 
 // https://env.t3.gg/docs/recipes#booleans
 const booleanSchema = z
@@ -50,6 +51,11 @@ export const env = createEnv({
     PAYMENT_FEE_RATE_PERCENT: z.string().optional(),
     PAYMENT_FEE_VARIANT_ID: z.string().optional(),
     PAYMENT_FEE_METADATA_KEY: z.string().optional(),
+    /**
+     * A3d (authorize, then capture): "manual" (default with the gate on) or "automatic" (kill
+     * switch). No effect with the gate off. See src/modules/payment-fee-gate/paypal-capture-config.ts.
+     */
+    PAYMENT_FEE_PAYPAL_CAPTURE: z.string().optional(),
   },
   shared: {
     NODE_ENV: z.enum(["development", "production", "test"]).optional().default("development"),
@@ -86,6 +92,7 @@ export const env = createEnv({
     PAYMENT_FEE_RATE_PERCENT: process.env.PAYMENT_FEE_RATE_PERCENT,
     PAYMENT_FEE_VARIANT_ID: process.env.PAYMENT_FEE_VARIANT_ID,
     PAYMENT_FEE_METADATA_KEY: process.env.PAYMENT_FEE_METADATA_KEY,
+    PAYMENT_FEE_PAYPAL_CAPTURE: process.env.PAYMENT_FEE_PAYPAL_CAPTURE,
   },
   isServer: typeof window === "undefined" || process.env.NODE_ENV === "test",
   onValidationError(issues) {
@@ -115,5 +122,15 @@ if (typeof window === "undefined" || process.env.NODE_ENV === "test") {
 
   if (paymentFeeGate.isErr()) {
     throw paymentFeeGate.error;
+  }
+
+  // A3d: an unknown PAYMENT_FEE_PAYPAL_CAPTURE stops the app too, gate on or off.
+  const paypalCapture = parsePaypalCaptureEnv({
+    PAYMENT_FEE_GATE: env.PAYMENT_FEE_GATE,
+    PAYMENT_FEE_PAYPAL_CAPTURE: env.PAYMENT_FEE_PAYPAL_CAPTURE,
+  });
+
+  if (paypalCapture.isErr()) {
+    throw paypalCapture.error;
   }
 }

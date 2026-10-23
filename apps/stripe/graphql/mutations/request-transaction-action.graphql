@@ -1,0 +1,20 @@
+# A3d: the capture worker asks Saleor to capture (CHARGE, the order total) or release (CANCEL)
+# an authorization. Saleor records the request and sends TRANSACTION_CHARGE_REQUESTED /
+# TRANSACTION_CANCELATION_REQUESTED to this app (the transaction's owner), whose handlers move
+# the money. App token, HANDLE_PAYMENTS. Sent only with the PayPal-fee gate on.
+mutation RequestTransactionAction(
+  $transactionId: ID!
+  $actionType: TransactionActionEnum!
+  $amount: PositiveDecimal
+) {
+  transactionRequestAction(id: $transactionId, actionType: $actionType, amount: $amount) {
+    errors {
+      field
+      message
+      code
+    }
+    transaction {
+      id
+    }
+  }
+}

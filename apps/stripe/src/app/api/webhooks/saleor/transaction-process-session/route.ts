@@ -14,6 +14,7 @@ import { loggerContext, withLoggerContext } from "@/lib/logger-context";
 import { setObservabilitySaleorApiUrl } from "@/lib/observability-saleor-api-url";
 import { setObservabilitySourceObjectId } from "@/lib/observability-source-object-id";
 import { appConfigRepoImpl } from "@/modules/app-config/repositories/app-config-repo-impl";
+import { getPaypalCaptureTrigger } from "@/modules/paypal-capture/paypal-capture-runtime";
 import { createSaleorApiUrl } from "@/modules/saleor/saleor-api-url";
 import { StripePaymentIntentsApiFactory } from "@/modules/stripe/stripe-payment-intents-api-factory";
 import { transactionRecorder } from "@/modules/transactions-recording/repositories/transaction-recorder-impl";
@@ -26,6 +27,8 @@ const useCase = new TransactionProcessSessionUseCase({
   appConfigRepo: appConfigRepoImpl,
   stripePaymentIntentsApiFactory: new StripePaymentIntentsApiFactory(),
   transactionRecorder: transactionRecorder,
+  // A3d "soon" capture checks: only with the PayPal-fee gate on (null otherwise).
+  paypalCaptureTrigger: getPaypalCaptureTrigger(),
 });
 
 const logger = createLogger("TRANSACTION_PROCESS_SESSION route");

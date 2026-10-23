@@ -1,0 +1,98 @@
+# A3d (authorize, then capture): everything the capture rule (decideCapture) reads about one
+# Saleor transaction, in one query with the app token (Query.transaction needs HANDLE_PAYMENTS or
+# MANAGE_ORDERS; Order.transactions too). Sent only by the capture worker, with the PayPal-fee
+# gate on. The fee line is checked on the ORDER lines by productVariantId: a deleted variant
+# leaves OrderLine.variant null, productVariantId keeps the ID.
+query FetchCaptureTransaction($transactionId: ID!) {
+  transaction(id: $transactionId) {
+    id
+    pspReference
+    metadata {
+      key
+      value
+    }
+    authorizedAmount {
+      amount
+      currency
+    }
+    chargedAmount {
+      amount
+      currency
+    }
+    refundedAmount {
+      amount
+      currency
+    }
+    canceledAmount {
+      amount
+      currency
+    }
+    authorizePendingAmount {
+      amount
+      currency
+    }
+    chargePendingAmount {
+      amount
+      currency
+    }
+    refundPendingAmount {
+      amount
+      currency
+    }
+    cancelPendingAmount {
+      amount
+      currency
+    }
+    checkout {
+      id
+    }
+    order {
+      id
+      number
+      status
+      total {
+        gross {
+          amount
+          currency
+        }
+      }
+      lines {
+        productVariantId
+        quantity
+        metadata {
+          key
+          value
+        }
+        totalPrice {
+          gross {
+            amount
+            currency
+          }
+        }
+      }
+      transactions {
+        id
+        authorizedAmount {
+          amount
+          currency
+        }
+        chargedAmount {
+          amount
+          currency
+        }
+        authorizePendingAmount {
+          amount
+          currency
+        }
+        chargePendingAmount {
+          amount
+          currency
+        }
+      }
+      payments {
+        id
+        isActive
+      }
+    }
+  }
+}

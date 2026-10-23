@@ -28,7 +28,8 @@
         "PAYMENT_FEE_GATE",
         "PAYMENT_FEE_RATE_PERCENT",
         "PAYMENT_FEE_VARIANT_ID",
-        "PAYMENT_FEE_METADATA_KEY"
+        "PAYMENT_FEE_METADATA_KEY",
+        "PAYMENT_FEE_PAYPAL_CAPTURE"
       ]
     }
   }

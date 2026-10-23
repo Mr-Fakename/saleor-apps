@@ -13,6 +13,7 @@ import { loggerContext, withLoggerContext } from "@/lib/logger-context";
 import { setObservabilitySaleorApiUrl } from "@/lib/observability-saleor-api-url";
 import { saleorApp } from "@/lib/saleor-app";
 import { appConfigRepoImpl } from "@/modules/app-config/repositories/app-config-repo-impl";
+import { getPaypalCaptureTrigger } from "@/modules/paypal-capture/paypal-capture-runtime";
 import { TransactionEventReporter } from "@/modules/saleor/transaction-event-reporter";
 import { TransactionEventsFetcher } from "@/modules/saleor/transaction-events-fetcher";
 import { StripeWebhookManager } from "@/modules/stripe/stripe-webhook-manager";
@@ -42,6 +43,8 @@ const useCase = new StripeWebhookUseCase({
     return new TransactionEventsFetcher(createInstrumentedGraphqlClient(authData));
   },
   webhookManager: new StripeWebhookManager(),
+  // A3d "soon" capture checks: only with the PayPal-fee gate on (null otherwise).
+  paypalCaptureTrigger: getPaypalCaptureTrigger(),
 });
 
 const logger = createLogger("StripeWebhookHandler");

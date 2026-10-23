@@ -81,9 +81,17 @@ const paymentIntent = (metadata: Record<string, string>, fields: Partial<Stripe.
     ...fields,
   }) as Stripe.PaymentIntent;
 
+// A3d: with the gate on, a paypal-only PaymentIntent is created for a manual PayPal capture
+// (PAYMENT_FEE_PAYPAL_CAPTURE defaults to "manual"); an automatic one is re-initialized.
 const paypalOnly = paymentIntent(
   { saleor_payment_policy: "paypal-only" },
-  { payment_method_types: ["paypal"], excluded_payment_method_types: null, automatic_payment_methods: null },
+  {
+    payment_method_types: ["paypal"],
+    excluded_payment_method_types: null,
+    automatic_payment_methods: null,
+    capture_method: "automatic_async",
+    payment_method_options: { paypal: { capture_method: "manual" } } as Stripe.PaymentIntent["payment_method_options"],
+  },
 );
 
 const legacy = paymentIntent(
@@ -200,6 +208,13 @@ describe("POST /api/update-payment-intent with the PayPal-fee gate on (A3c)", ()
     { case: "a stale fee on a paypal-only PaymentIntent", pi: paypalOnly, fee: 3, code: "PAYMENT_FEE_STALE" },
     { case: "no fee on a paypal-only PaymentIntent", pi: paypalOnly, fee: null, code: "PAYMENT_FEE_REQUIRED" },
     { case: "a legacy PaymentIntent", pi: legacy, fee: 3.15, code: "PAYMENT_POLICY_REINIT" },
+    {
+      // A3d: the route passes PAYMENT_FEE_PAYPAL_CAPTURE (default "manual" with the gate on).
+      case: "a paypal-only PaymentIntent created without manual capture",
+      pi: { ...paypalOnly, payment_method_options: { paypal: {} } } as Stripe.PaymentIntent,
+      fee: 3.15,
+      code: "PAYMENT_POLICY_REINIT",
+    },
   ])("answers 409 with code $code for $case", async ({ pi, fee, code }) => {
     vi.mocked(mockedStripePaymentIntentsApi.getPaymentIntent).mockResolvedValue(ok(pi));
     saleorQuery.mockImplementation(() =>

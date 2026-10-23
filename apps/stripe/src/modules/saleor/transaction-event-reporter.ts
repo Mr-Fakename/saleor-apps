@@ -12,12 +12,14 @@ import { SaleorMoney } from "@/modules/saleor/saleor-money";
 import { StripePaymentIntentId } from "@/modules/stripe/stripe-payment-intent-id";
 
 import { StripeRefundId } from "../stripe/stripe-refund-id";
+import type { ReleasedRemainderPspReference } from "./released-remainder";
 
 export type TransactionEventReportInput = {
   transactionId: string;
   message: string;
   amount: SaleorMoney;
-  pspReference: StripePaymentIntentId | StripeRefundId;
+  /** A remainder Stripe released after a partial capture: see resolveReleasedRemainderReport. */
+  pspReference: StripePaymentIntentId | StripeRefundId | ReleasedRemainderPspReference;
   time: string;
   type: TransactionEventTypeEnum;
   actions: TransactionActionEnum[] | null;

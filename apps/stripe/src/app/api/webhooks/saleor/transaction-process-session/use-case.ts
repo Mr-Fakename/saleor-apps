@@ -1,6 +1,7 @@
 import { ObservabilityAttributes } from "@saleor/apps-otel/src/observability-attributes";
 import { captureException } from "@sentry/nextjs";
 import { err, ok, Result } from "neverthrow";
+import Stripe from "stripe";
 
 import {
   AppIsNotConfiguredResponse,
@@ -13,6 +14,7 @@ import { BaseError } from "@/lib/errors";
 import { createLogger } from "@/lib/logger";
 import { loggerContext } from "@/lib/logger-context";
 import { AppConfigRepo } from "@/modules/app-config/repositories/app-config-repo";
+import { IPaypalCaptureTrigger } from "@/modules/paypal-capture/capture-check-scheduler";
 import { ResolvedTransactionFlow } from "@/modules/resolved-transaction-flow";
 import { resolveSaleorMoneyFromStripePaymentIntent } from "@/modules/saleor/resolve-saleor-money-from-stripe-payment-intent";
 import { SaleorApiUrl } from "@/modules/saleor/saleor-api-url";
@@ -43,15 +45,46 @@ export class TransactionProcessSessionUseCase {
   private appConfigRepo: AppConfigRepo;
   private stripePaymentIntentsApiFactory: IStripePaymentIntentsApiFactory;
   private transactionRecorder: TransactionRecorderRepo;
+  private paypalCaptureTrigger: IPaypalCaptureTrigger | null;
 
   constructor(deps: {
     appConfigRepo: AppConfigRepo;
     stripePaymentIntentsApiFactory: IStripePaymentIntentsApiFactory;
     transactionRecorder: TransactionRecorderRepo;
+    /** A3d "soon" capture checks; null or absent with the PayPal-fee gate off. */
+    paypalCaptureTrigger?: IPaypalCaptureTrigger | null;
   }) {
     this.appConfigRepo = deps.appConfigRepo;
     this.stripePaymentIntentsApiFactory = deps.stripePaymentIntentsApiFactory;
     this.transactionRecorder = deps.transactionRecorder;
+    this.paypalCaptureTrigger = deps.paypalCaptureTrigger ?? null;
+  }
+
+  /**
+   * A3d: the app answers AUTHORIZATION_SUCCESS (a paypal-only PaymentIntent authorized after the
+   * PayPal approval): check it for capture soon. Gate off: no trigger. A scheduling failure
+   * never changes the answer; the 60 s sweep still finds the authorization.
+   */
+  private notifyAuthorizationSuccess(args: {
+    saleorApiUrl: SaleorApiUrl;
+    appId: string;
+    channelId: string;
+    paymentIntent: Pick<Stripe.PaymentIntent, "id" | "metadata">;
+  }) {
+    if (!this.paypalCaptureTrigger) {
+      return;
+    }
+
+    try {
+      this.paypalCaptureTrigger.onAuthorizationSuccess({
+        saleorApiUrl: args.saleorApiUrl,
+        appId: args.appId,
+        paymentIntent: args.paymentIntent,
+        stripeConfig: { channelId: args.channelId },
+      });
+    } catch (error) {
+      this.logger.error("Failed to schedule the capture checks of an authorization", { error });
+    }
   }
 
   private getFailureAppResult(resolvedTransactionFlow: ResolvedTransactionFlow) {
@@ -176,12 +209,23 @@ export class TransactionProcessSessionUseCase {
       );
     }
 
+    const transactionResult = mapPaymentIntentStatusToTransactionResult(
+      createStripePaymentIntentStatus(getPaymentIntentResult.value.status),
+      recordedTransactionResult.value.resolvedTransactionFlow,
+    );
+
+    if (transactionResult.result === "AUTHORIZATION_SUCCESS") {
+      this.notifyAuthorizationSuccess({
+        saleorApiUrl,
+        appId,
+        channelId: event.sourceObject.channel.id,
+        paymentIntent: getPaymentIntentResult.value,
+      });
+    }
+
     return ok(
       new TransactionProcessSessionUseCaseResponses.Success({
-        transactionResult: mapPaymentIntentStatusToTransactionResult(
-          createStripePaymentIntentStatus(getPaymentIntentResult.value.status),
-          recordedTransactionResult.value.resolvedTransactionFlow,
-        ),
+        transactionResult,
         stripePaymentIntentId: paymentIntentIdResult,
         saleorMoney: saleorMoneyResult.value,
         timestamp: createTimestampFromPaymentIntent(getPaymentIntentResult.value),

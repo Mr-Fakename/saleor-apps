@@ -9,6 +9,8 @@ import { BaseError } from "@/lib/errors";
 import { createLogger } from "@/lib/logger";
 import { loggerContext } from "@/lib/logger-context";
 import { AppConfigRepo } from "@/modules/app-config/repositories/app-config-repo";
+import { IPaypalCaptureTrigger } from "@/modules/paypal-capture/capture-check-scheduler";
+import { resolveReleasedRemainderReport } from "@/modules/saleor/released-remainder";
 import { SaleorApiUrl } from "@/modules/saleor/saleor-api-url";
 import {
   ITransactionEventReporter,
@@ -18,6 +20,7 @@ import { ITransactionEventsFetcher } from "@/modules/saleor/transaction-events-f
 import { StripeClient } from "@/modules/stripe/stripe-client";
 import { StripeEnv } from "@/modules/stripe/stripe-env";
 import { StripeRestrictedKey } from "@/modules/stripe/stripe-restricted-key";
+import { createTimestampFromStripeEvent } from "@/modules/stripe/stripe-timestamps";
 import { StripeWebhookManager } from "@/modules/stripe/stripe-webhook-manager";
 import { AllowedStripeObjectMetadata, IStripeEventVerify } from "@/modules/stripe/types";
 import {
@@ -58,6 +61,7 @@ export class StripeWebhookUseCase {
   private transactionEventReporterFactory: SaleorTransactionEventReporterFactory;
   private transactionEventsFetcherFactory: SaleorTransactionEventsFetcherFactory;
   private webhookManager: StripeWebhookManager;
+  private paypalCaptureTrigger: IPaypalCaptureTrigger | null;
 
   constructor(deps: {
     appConfigRepo: AppConfigRepo;
@@ -68,6 +72,8 @@ export class StripeWebhookUseCase {
     /** Reads a Saleor transaction's events with the app token (refunds, A2e). */
     transactionEventsFetcherFactory: SaleorTransactionEventsFetcherFactory;
     webhookManager: StripeWebhookManager;
+    /** A3d "soon" capture checks; null or absent with the PayPal-fee gate off. */
+    paypalCaptureTrigger?: IPaypalCaptureTrigger | null;
   }) {
     this.appConfigRepo = deps.appConfigRepo;
     this.webhookEventVerifyFactory = deps.webhookEventVerifyFactory;
@@ -76,6 +82,7 @@ export class StripeWebhookUseCase {
     this.transactionEventReporterFactory = deps.transactionEventReporterFactory;
     this.transactionEventsFetcherFactory = deps.transactionEventsFetcherFactory;
     this.webhookManager = deps.webhookManager;
+    this.paypalCaptureTrigger = deps.paypalCaptureTrigger ?? null;
   }
 
   private async removeStripeWebhook({
@@ -378,19 +385,138 @@ export class StripeWebhookUseCase {
     });
 
     if (reportResult.isErr()) {
-      if (reportResult.error instanceof TransactionEventReporterErrors.AlreadyReportedError) {
-        this.logger.info("Transaction event already reported");
+      if (!(reportResult.error instanceof TransactionEventReporterErrors.AlreadyReportedError)) {
+        this.logger.error("Failed to report transaction event", {
+          error: reportResult.error,
+        });
 
-        return ok(new StripeWebhookSuccessResponse());
+        return err(new StripeWebhookSeverErrorResponse());
       }
 
-      this.logger.error("Failed to report transaction event", {
-        error: reportResult.error,
-      });
+      this.logger.info("Transaction event already reported");
+    }
 
+    // S2 ledger fix (all shops): what Stripe released after a partial capture.
+    const remainderResult = await this.reportReleasedRemainder({
+      event: event.value,
+      saleorTransactionId: processingResult.value.saleorTransactionId,
+      stripeEnv: config.value.getStripeEnvValue(),
+      transactionEventReporter,
+    });
+
+    if (remainderResult.isErr()) {
       return err(new StripeWebhookSeverErrorResponse());
     }
 
+    // A3d (gate on only): check this authorization for capture soon.
+    if (processingResult.value.transactionResult.result === "AUTHORIZATION_SUCCESS") {
+      this.notifyAuthorizationSuccess({
+        event: event.value,
+        saleorApiUrl: webhookParams.saleorApiUrl,
+        appId: authData.appId,
+        configId: webhookParams.configurationId,
+      });
+    }
+
     return ok(new StripeWebhookSuccessResponse());
+  }
+
+  /**
+   * Spike S2 (sandbox, 2026-10-23): a partial capture releases the rest of the authorization at
+   * Stripe, with no refund.* event, and Saleor 3.22.74 keeps that rest in authorizedAmount. On
+   * payment_intent.succeeded with amount_received < amount, the rest is reported as
+   * CANCEL_SUCCESS under "<pi>:released" (resolveReleasedRemainderReport), after the
+   * CHARGE_SUCCESS (new or already recorded). Not gated: every shop's ledger needs it. A full
+   * capture reports nothing more, as before.
+   *
+   * Idempotent: the report is the same each time, and Saleor answers a repeat
+   * `alreadyProcessed`. A failure answers 500, so Stripe re-sends the event: the CHARGE_SUCCESS
+   * is then already recorded, and the remainder is reported again.
+   */
+  private async reportReleasedRemainder(args: {
+    event: Stripe.Event;
+    saleorTransactionId: string;
+    stripeEnv: StripeEnv;
+    transactionEventReporter: ITransactionEventReporter;
+  }): Promise<Result<void, InstanceType<typeof BaseError>>> {
+    if (args.event.type !== "payment_intent.succeeded") {
+      return ok(undefined);
+    }
+
+    const reportInput = resolveReleasedRemainderReport({
+      paymentIntent: args.event.data.object,
+      saleorTransactionId: args.saleorTransactionId,
+      time: createTimestampFromStripeEvent(args.event),
+      stripeEnv: args.stripeEnv,
+    });
+
+    if (reportInput.isErr()) {
+      this.logger.error("Failed to resolve the released remainder of a partial capture", {
+        error: reportInput.error,
+      });
+
+      return err(reportInput.error);
+    }
+
+    if (!reportInput.value) {
+      return ok(undefined);
+    }
+
+    const reportResult = await args.transactionEventReporter.reportTransactionEvent(
+      reportInput.value,
+    );
+
+    if (reportResult.isOk()) {
+      this.logger.info("Reported the remainder Stripe released after a partial capture", {
+        transactionId: args.saleorTransactionId,
+        pspReference: reportInput.value.pspReference,
+        amount: reportInput.value.amount.amount,
+      });
+
+      return ok(undefined);
+    }
+
+    if (reportResult.error instanceof TransactionEventReporterErrors.AlreadyReportedError) {
+      this.logger.info("Released remainder already reported", {
+        pspReference: reportInput.value.pspReference,
+      });
+
+      return ok(undefined);
+    }
+
+    this.logger.error("Failed to report the remainder Stripe released after a partial capture", {
+      error: reportResult.error,
+      pspReference: reportInput.value.pspReference,
+    });
+
+    return err(reportResult.error);
+  }
+
+  /**
+   * A3d: after AUTHORIZATION_SUCCESS (payment_intent.amount_capturable_updated, spike S1), a
+   * paypal-only PaymentIntent is checked for capture soon (+15/+45/+120 s). Only with the
+   * PayPal-fee gate on (the trigger is null otherwise). A scheduling failure never fails the
+   * webhook: the 60 s sweep still finds the authorization.
+   */
+  private notifyAuthorizationSuccess(args: {
+    event: Stripe.Event;
+    saleorApiUrl: SaleorApiUrl;
+    appId: string;
+    configId: string;
+  }) {
+    if (!this.paypalCaptureTrigger || args.event.data.object.object !== "payment_intent") {
+      return;
+    }
+
+    try {
+      this.paypalCaptureTrigger.onAuthorizationSuccess({
+        saleorApiUrl: args.saleorApiUrl,
+        appId: args.appId,
+        paymentIntent: args.event.data.object,
+        stripeConfig: { configId: args.configId },
+      });
+    } catch (error) {
+      this.logger.error("Failed to schedule the capture checks of an authorization", { error });
+    }
   }
 }

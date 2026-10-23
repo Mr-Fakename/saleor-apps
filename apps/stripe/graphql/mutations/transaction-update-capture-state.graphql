@@ -1,0 +1,16 @@
+# A3d: the capture worker tags a held authorization for staff and the stuck-payment alert
+# (public metadata stripe_capture_state=held, stripe_capture_hold_reason,
+# stripe_capture_checked_at). A document of its own, sent only with the PayPal-fee gate on, so
+# shops without the gate send exactly today's documents.
+mutation TransactionUpdateCaptureState($transactionId: ID!, $metadata: [MetadataInput!]!) {
+  transactionUpdate(id: $transactionId, transaction: { metadata: $metadata }) {
+    errors {
+      message
+      code
+      field
+    }
+    transaction {
+      id
+    }
+  }
+}
