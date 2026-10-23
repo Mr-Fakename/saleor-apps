@@ -518,6 +518,53 @@ describe("POST /api/payment-fee", () => {
       expect(baseCents).toBe(8979);
     });
 
+    it("tax-exempt checkout: writes the fee on the net base as the own price (15.00), shown net 12.50", async () => {
+      // dess: prices entered with tax (20 % VAT) and taxExemptionManage. The shopper pays the fee
+      // net of VAT, as with the gate off.
+      const checkout = fakeSaleor.addCheckout({ shipping: 0, taxExemption: { vatPercent: 20 } });
+
+      checkout.lines.push(fakeSaleor.newLine(PRODUCT_VARIANT_ID, 1, 1200));
+
+      const res = await callFee({ checkoutId: checkout.id, apply: true });
+
+      expect(res._status).toBe(200);
+      expect(fakeSaleor.mutationNames()).toStrictEqual(["AddLinesToCheckout"]);
+      const [line] = feeLines(checkout.id);
+
+      expect(line.unitPrice).toBe(15);
+      expect(fakeSaleor.lineTotal(checkout, line)).toBe(12.5);
+      expect(fakeSaleor.total(checkout)).toBe(1012.5);
+
+      fakeSaleor.calls = [];
+      await callFee({ checkoutId: checkout.id, apply: true });
+      expect(fakeSaleor.mutationNames()).toStrictEqual([]);
+    });
+
+    it("settles a fee line the last-line rounding remainder put above its own price: no swap (the Stripe app refuses it)", async () => {
+      // Three 10.00 lines, FIXED voucher 0.02: each product share rounds up to 0.01, so the last
+      // line (the fee) gets -0.01 and shows 0.46 for an own price of 0.45. A swap cannot fix it:
+      // the new line is last again. The Stripe app refuses it (discounted-total-out-of-range).
+      const checkout = fakeSaleor.addCheckout({ shipping: 0, voucher: { type: "FIXED", value: 0.02 } });
+
+      for (let i = 0; i < 3; i += 1) {
+        checkout.lines.push(fakeSaleor.newLine(PRODUCT_VARIANT_ID, 1, 10));
+      }
+
+      const res = await callFee({ checkoutId: checkout.id, apply: true });
+
+      expect(res._status).toBe(200);
+      expect(fakeSaleor.mutationNames()).toStrictEqual(["AddLinesToCheckout"]);
+      const [line] = feeLines(checkout.id);
+
+      expect(line.unitPrice).toBe(0.45);
+      expect(fakeSaleor.lineTotal(checkout, line)).toBe(0.46);
+      expect(fakeSaleor.total(checkout)).toBe(30.43);
+
+      fakeSaleor.calls = [];
+      await callFee({ checkoutId: checkout.id, apply: true });
+      expect(fakeSaleor.mutationNames()).toStrictEqual([]);
+    });
+
     it("stops after 2 correction swaps and returns the latest state (the Stripe app stays the judge)", async () => {
       const checkout = seedCheckout();
 

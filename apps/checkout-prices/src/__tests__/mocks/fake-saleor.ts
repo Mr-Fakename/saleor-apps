@@ -40,6 +40,11 @@ export interface FakeCheckout {
   /** Checkout.languageCode (e.g. "EN"); absent = unset */
   languageCode?: string;
   voucher?: FakeVoucher;
+  /**
+   * taxExemptionManage on a channel with prices entered with tax: Saleor cuts every line and
+   * the shipping to net (checkout/calculations.py _remove_tax); the own price stays the price.
+   */
+  taxExemption?: { vatPercent: number };
   lines: FakeLine[];
 }
 
@@ -199,6 +204,7 @@ export class FakeSaleor {
       shipping: partial.shipping ?? 0,
       languageCode: partial.languageCode,
       voucher: partial.voucher,
+      taxExemption: partial.taxExemption,
       lines: partial.lines ?? [],
     };
 
@@ -526,11 +532,22 @@ export class FakeSaleor {
 
   /** Saleor checkout total: the lines after the voucher spread, plus shipping. */
   total(checkout: FakeCheckout): number {
-    return round2(checkout.lines.reduce((sum, l) => sum + this.lineTotal(checkout, l), 0) + checkout.shipping);
+    const shipping = checkout.taxExemption ? this.net(checkout, checkout.shipping) : checkout.shipping;
+
+    return round2(checkout.lines.reduce((sum, l) => sum + this.lineTotal(checkout, l), 0) + shipping);
   }
 
-  /** CheckoutLine.totalPrice: the line own price (unit price × quantity) minus its voucher share. */
+  private net(checkout: FakeCheckout, gross: number): number {
+    return checkout.taxExemption ? quantize(gross / (1 + checkout.taxExemption.vatPercent / 100)) : gross;
+  }
+
+  /** CheckoutLine.totalPrice, tax exemption included. */
   lineTotal(checkout: FakeCheckout, line: FakeLine): number {
+    return this.net(checkout, this.discountedLineTotal(checkout, line));
+  }
+
+  /** The line own price (unit price × quantity) minus its voucher share. */
+  private discountedLineTotal(checkout: FakeCheckout, line: FakeLine): number {
     const own = line.unitPrice * line.quantity;
     const { voucher } = checkout;
 

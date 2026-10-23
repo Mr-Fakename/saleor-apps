@@ -313,6 +313,38 @@ describe("verifyPaymentFee with an order-level voucher on the fee line (A12)", (
     expect(state.status === "INVALID" && state.reason).toBe("amount-mismatch");
   });
 
+  it("is VALID on a tax-exempt checkout: own 15.00, line net 12.50 (20 % VAT), base net 1000.00", () => {
+    // dess: prices entered with tax; taxExemptionManage makes Saleor cut each line's gross to net
+    // (checkout/calculations.py _remove_tax), while the own price stays the custom price. The
+    // shopper pays the fee net of VAT, as with the gate off.
+    expect(
+      verifyPaymentFee(
+        checkout(1012.5, [
+          productLine(1000, { quantity: 1, undiscountedTotalPrice: { amount: 1200, currency: "EUR" } }),
+          voucheredFeeLine(15, 12.5),
+        ]),
+        gate,
+      ),
+    ).toStrictEqual({ status: "VALID", baseCents: 100000, feeCents: 1500 });
+  });
+
+  it("refuses a fee line that the spread's last-line remainder put above its own price (0.45 shown 0.46)", () => {
+    // Three 10.00 lines and a FIXED 0.02 voucher: each product share rounds up to 0.01, so the
+    // last line (the fee) gets -0.01 (base_calculations.py _propagate_checkout_discount_on_
+    // checkout_lines_prices). checkout-prices does not swap it (the new line is last again).
+    const product = () => productLine(9.99, { quantity: 1, undiscountedTotalPrice: { amount: 10, currency: "EUR" } });
+
+    expect(
+      verifyPaymentFee(checkout(30.43, [product(), product(), product(), voucheredFeeLine(0.45, 0.46)]), gate),
+    ).toStrictEqual({
+      status: "INVALID",
+      reason: "discounted-total-out-of-range",
+      expectedFeeCents: 45,
+      ownFeeCents: 45,
+      lineFeeCents: 46,
+    });
+  });
+
   it("without a voucher, behaves as before: own price = total, VALID for 3.15 on 210.00", () => {
     expect(verifyPaymentFee(checkout(213.15, [productLine(210), feeLine(3.15)]), gate)).toStrictEqual(
       { status: "VALID", baseCents: 21000, feeCents: 315 },

@@ -127,7 +127,15 @@ export type PaymentFeeJudgement<L extends FeeJudgeLine> = {
   baseCents: number;
   /** the fee the rule asks for on that base */
   feeCents: number;
-  /** exactly one fee line, on the fee variant, quantity 1, current marker, own price = fee */
+  /**
+   * Exactly one fee line, on the fee variant, quantity 1, current marker, own price = fee.
+   *
+   * On purpose WITHOUT the Stripe app's range check (discounted total in [0, own price]):
+   * Saleor gives the voucher spread's rounding remainder to the last line, which can push the
+   * fee line above its own price (three 10.00 lines and a FIXED 0.02 voucher: 0.45 shows 0.46;
+   * about 1 cart in 200 000). A swap cannot fix that (the new line is last again), so the state
+   * is returned and the Stripe app refuses it with discounted-total-out-of-range.
+   */
   settled: boolean;
 };
 
