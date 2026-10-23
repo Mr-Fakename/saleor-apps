@@ -144,12 +144,16 @@ class Failure extends SuccessWebhookResponse {
  * isStripeOutcomeUnknown). Answering REFUND_FAILURE would tell staff the refund failed while it
  * may exist, and a new granted refund would refund the customer twice.
  *
- * HTTP 503 instead: Saleor 3.22.74 re-sends the same delivery when the app answers >= 500
- * (webhook/transport/synchronous/transport.py `handle_transaction_request_task`: 5 retries,
- * 10 * 2^n s apart, about 5 min), with the same payload, so the refund keeps its idempotency key
- * and Stripe returns the refund it may have made. The granted refund stays PENDING meanwhile.
- * After the last retry Saleor records its own REFUND_FAILURE ("Failed to delivery request.",
- * excluded from amounts) and staff can retry: the same key again for 24 h.
+ * HTTP 503 instead. Saleor 3.22.74 does re-send a delivery the app answered >= 500
+ * (webhook/transport/synchronous/transport.py handle_transaction_request_task,
+ * webhook/transport/utils.py handle_webhook_retry), but with an EMPTY body: a failed attempt
+ * calls EventPayload.save_as_file(), which writes the empty in-database payload over the stored
+ * file (saleor/core/models.py:199-203). The re-send cannot be processed, so nothing may rely on
+ * it: the request ends about 10 s later as Saleor's own REFUND_FAILURE ("Failed to delivery
+ * request.", excluded from amounts). The 503 only keeps a false app REFUND_FAILURE out of the
+ * ledger. A refund Stripe did create is reported by the Stripe webhook (StripeRefundHandler);
+ * staff can retry the granted refund, which sends the same idempotency key again for 24 h, so
+ * Stripe returns that refund instead of a second one.
  */
 export class RefundOutcomeUnknownResponse extends ErrorWebhookResponse {
   readonly statusCode = 503;

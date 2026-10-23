@@ -9,6 +9,13 @@
  * so a re-application can never compound. The rate is server config
  * (PAYMENT_FEE_RATE_PERCENT, default 1.5); a caller may still send its own
  * `ratePercent`/`amount` for backward compatibility, but they are never charged.
+ *
+ * The fee is written as the fee line's custom price, its OWN price
+ * (`undiscountedTotalPrice`). Saleor 3.22 spreads an ENTIRE_ORDER voucher or an
+ * order promotion over the fee line too, so its `totalPrice` can be lower; the
+ * base above uses that discounted `totalPrice`. The Stripe app's check is
+ * IDENTICAL (apps/stripe/src/modules/payment-fee-gate/payment-fee-rule.ts and
+ * verify-payment-fee.ts): own price = fee, discounted total in [0, own price].
  */
 
 /** Line-metadata key that marks a fee line. Lookups match the KEY alone: the
@@ -88,4 +95,60 @@ export function computeFeeCents(feeExclusiveTotalCents: number, ratePercent: num
 
 export function isPaymentFeeLine(line: { metadata?: ReadonlyArray<{ key: string }> | null }): boolean {
   return !!line.metadata?.some((m) => m.key === PAYMENT_FEE_METADATA_KEY);
+}
+
+/**
+ * True for the configured payment-fee variant (PAYMENT_FEE_VARIANT_ID); false
+ * when none is configured (SDS). Endpoints other than /api/payment-fee must
+ * never price a line on it: the Stripe app's own-price check holds only while
+ * no writer changes a fee line's price in place. Decided by the VARIANT, not
+ * the public marker, which shoppers can write onto any line.
+ */
+export function isPaymentFeeVariant(
+  variantId: string,
+  configuredVariantId: string | undefined = process.env.PAYMENT_FEE_VARIANT_ID,
+): boolean {
+  return !!configuredVariantId && variantId === configuredVariantId;
+}
+
+type FeeJudgeLine = {
+  id: string;
+  variant: { id: string };
+  quantity: number;
+  metadata: ReadonlyArray<{ key: string; value: string }>;
+  totalPrice: { gross: { amount: number } };
+  undiscountedTotalPrice: { amount: number };
+};
+
+export type PaymentFeeJudgement<L extends FeeJudgeLine> = {
+  /** every line carrying the fee marker */
+  feeLines: L[];
+  /** toCents(total) − Σ toCents(fee lines' DISCOUNTED totals) */
+  baseCents: number;
+  /** the fee the rule asks for on that base */
+  feeCents: number;
+  /** exactly one fee line, on the fee variant, quantity 1, current marker, own price = fee */
+  settled: boolean;
+};
+
+/** One snapshot of the checkout under the fee rule (header comment). */
+export function judgePaymentFee<L extends FeeJudgeLine>(
+  checkout: { totalPrice: { gross: { amount: number } }; lines: ReadonlyArray<L> },
+  config: { ratePercent: number; variantId: string },
+): PaymentFeeJudgement<L> {
+  const feeLines = checkout.lines.filter(isPaymentFeeLine);
+  const baseCents =
+    toCents(checkout.totalPrice.gross.amount) -
+    feeLines.reduce((sum, line) => sum + toCents(line.totalPrice.gross.amount), 0);
+  const feeCents = computeFeeCents(baseCents, config.ratePercent);
+  const markerValue = feeMetadataValue(config.ratePercent);
+  const [only] = feeLines;
+  const settled =
+    feeLines.length === 1 &&
+    only.variant.id === config.variantId &&
+    only.quantity === 1 &&
+    toCents(only.undiscountedTotalPrice.amount) === feeCents &&
+    only.metadata.some((m) => m.key === PAYMENT_FEE_METADATA_KEY && m.value === markerValue);
+
+  return { feeLines, baseCents, feeCents, settled };
 }

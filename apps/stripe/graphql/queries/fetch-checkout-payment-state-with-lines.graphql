@@ -69,6 +69,11 @@ query FetchCheckoutPaymentStateWithLines($checkoutId: ID!) {
           currency
         }
       }
+      # The fee line's own price (its custom price): the fee rule compares it (verifyPaymentFee).
+      undiscountedTotalPrice {
+        amount
+        currency
+      }
     }
   }
 }

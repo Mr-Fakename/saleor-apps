@@ -93,6 +93,7 @@ const productLine = {
   variant: { id: "UHJvZHVjdFZhcmlhbnQ6MTI=" },
   metadata: [],
   totalPrice: { gross: usd(100) },
+  undiscountedTotalPrice: usd(100),
 };
 
 const feeLine = {
@@ -101,6 +102,7 @@ const feeLine = {
   variant: { id: FEE_VARIANT_ID },
   metadata: [{ key: "payment_fee_type", value: "paypal_1.5_percent" }],
   totalPrice: { gross: usd(1.5) },
+  undiscountedTotalPrice: usd(1.5),
 };
 
 const checkout = (

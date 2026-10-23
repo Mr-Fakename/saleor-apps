@@ -15,31 +15,53 @@ const gate: PaymentFeeGateConfig = {
 
 const eur = (amount: number, currency = "EUR") => ({ gross: { amount, currency } });
 
+/*
+ * Without an order-level discount, Saleor's own price of a line (CheckoutLine.undiscountedTotalPrice)
+ * equals its total, so both helpers default it to the total's gross. The voucher cases set it.
+ */
 const productLine = (
   amount: number,
   overrides: Partial<PaymentFeeCheckoutLine> = {},
-): PaymentFeeCheckoutLine => ({
-  variant: { id: PRODUCT_VARIANT_ID },
-  quantity: 2,
-  metadata: [],
-  totalPrice: eur(amount),
-  ...overrides,
-});
+): PaymentFeeCheckoutLine => {
+  const totalPrice = overrides.totalPrice ?? eur(amount);
+
+  return {
+    variant: { id: PRODUCT_VARIANT_ID },
+    quantity: 2,
+    metadata: [],
+    totalPrice,
+    undiscountedTotalPrice: totalPrice.gross,
+    ...overrides,
+  };
+};
 
 const feeLine = (
   amount: number,
   overrides: Partial<PaymentFeeCheckoutLine> = {},
-): PaymentFeeCheckoutLine => ({
-  variant: { id: FEE_VARIANT_ID },
-  quantity: 1,
-  // The value embeds the rate; lookups match the KEY only (as checkout-prices does).
-  metadata: [
-    { key: "payment_fee_type", value: "paypal_1.5_percent" },
-    { key: "display_name", value: "Service fee (1.5%)" },
-  ],
-  totalPrice: eur(amount),
-  ...overrides,
-});
+): PaymentFeeCheckoutLine => {
+  const totalPrice = overrides.totalPrice ?? eur(amount);
+
+  return {
+    variant: { id: FEE_VARIANT_ID },
+    quantity: 1,
+    // The value embeds the rate; lookups match the KEY only (as checkout-prices does).
+    metadata: [
+      { key: "payment_fee_type", value: "paypal_1.5_percent" },
+      { key: "display_name", value: "Service fee (1.5%)" },
+    ],
+    totalPrice,
+    undiscountedTotalPrice: totalPrice.gross,
+    ...overrides,
+  };
+};
+
+/** A fee line whose own price (the custom price checkout-prices wrote) differs from its total. */
+const voucheredFeeLine = (own: number, discounted: number) =>
+  feeLine(discounted, { undiscountedTotalPrice: { amount: own, currency: "EUR" } });
+
+/** A product line of 94.10 that an ENTIRE_ORDER voucher of 10 % brought to 84.69 (case A12). */
+const voucheredProductLine = () =>
+  productLine(84.69, { quantity: 1, undiscountedTotalPrice: { amount: 94.1, currency: "EUR" } });
 
 const checkout = (
   total: number,
@@ -203,5 +225,97 @@ describe("verifyPaymentFee (A3c §2a)", () => {
         variantId: "UHJvZHVjdFZhcmlhbnQ6NDUw",
       }).status,
     ).toBe("INVALID");
+  });
+});
+
+/*
+ * Case A12 (Stripe sandbox): an ENTIRE_ORDER voucher (10 %, apply_once_per_order=false) is
+ * spread by Saleor 3.22 over ALL lines, the fee line included. checkout-prices wrote the fee line's
+ * custom price 1.36 (1.5 % of the fee-exclusive base 90.59); Saleor discounted it to 1.22, and the
+ * checkout total is 91.81. The fee line's OWN price is what the rule checks; its discounted total
+ * only feeds the base.
+ */
+describe("verifyPaymentFee with an order-level voucher on the fee line (A12)", () => {
+  it("is VALID when the own price is the fee for the base (own 1.36, discounted 1.22, total 91.81)", () => {
+    expect(
+      verifyPaymentFee(checkout(91.81, [voucheredProductLine(), voucheredFeeLine(1.36, 1.22)]), gate),
+    ).toStrictEqual({ status: "VALID", baseCents: 9059, feeCents: 136 });
+  });
+
+  it("is VALID when the voucher took the whole fee line (apply-once voucher on the cheapest line)", () => {
+    expect(
+      verifyPaymentFee(checkout(90.59, [voucheredProductLine(), voucheredFeeLine(1.36, 0)]), gate),
+    ).toStrictEqual({ status: "VALID", baseCents: 9059, feeCents: 136 });
+  });
+
+  it("is INVALID amount-mismatch when the own price is not the fee, even if the discounted total is", () => {
+    // own 1.50 for an expected 1.36; the discounted total happens to be 1.36 (the old rule passed it).
+    expect(
+      verifyPaymentFee(checkout(91.95, [voucheredProductLine(), voucheredFeeLine(1.5, 1.36)]), gate),
+    ).toStrictEqual({
+      status: "INVALID",
+      reason: "amount-mismatch",
+      expectedFeeCents: 136,
+      ownFeeCents: 150,
+      lineFeeCents: 136,
+    });
+  });
+
+  it("is INVALID amount-mismatch for a fee written before the voucher (A12b: own 1.50, discounted 1.35)", () => {
+    const state = verifyPaymentFee(
+      checkout(91.94, [voucheredProductLine(), voucheredFeeLine(1.5, 1.35)]),
+      gate,
+    );
+
+    expect(state.status === "INVALID" && state.reason).toBe("amount-mismatch");
+  });
+
+  it("is INVALID discounted-total-out-of-range when the discounted total is above the own price", () => {
+    expect(
+      verifyPaymentFee(checkout(92.09, [voucheredProductLine(), voucheredFeeLine(1.36, 1.5)]), gate),
+    ).toStrictEqual({
+      status: "INVALID",
+      reason: "discounted-total-out-of-range",
+      expectedFeeCents: 136,
+      ownFeeCents: 136,
+      lineFeeCents: 150,
+    });
+  });
+
+  it("is INVALID discounted-total-out-of-range when the discounted total is negative", () => {
+    const state = verifyPaymentFee(
+      checkout(90.58, [voucheredProductLine(), voucheredFeeLine(1.36, -0.01)]),
+      gate,
+    );
+
+    expect(state.status === "INVALID" && state.reason).toBe("discounted-total-out-of-range");
+  });
+
+  it("is INVALID currency-mismatch when the own price is in another currency", () => {
+    const state = verifyPaymentFee(
+      checkout(91.81, [
+        voucheredProductLine(),
+        feeLine(1.22, { undiscountedTotalPrice: { amount: 1.36, currency: "USD" } }),
+      ]),
+      gate,
+    );
+
+    expect(state.status === "INVALID" && state.reason).toBe("currency-mismatch");
+  });
+
+  it("still fails a fee written for an old base (shipping added after the voucher and the fee)", () => {
+    // Same lines as A12, 9.90 shipping added: base 100.49 needs 1.51, the line still holds 1.36.
+    const state = verifyPaymentFee(
+      checkout(101.71, [voucheredProductLine(), voucheredFeeLine(1.36, 1.22)]),
+      gate,
+    );
+
+    expect(state.status === "INVALID" && state.reason).toBe("amount-mismatch");
+  });
+
+  it("without a voucher, behaves as before: own price = total, VALID for 3.15 on 210.00", () => {
+    expect(verifyPaymentFee(checkout(213.15, [productLine(210), feeLine(3.15)]), gate)).toStrictEqual(
+      { status: "VALID", baseCents: 21000, feeCents: 315 },
+    );
   });
 });

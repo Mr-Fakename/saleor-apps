@@ -46,6 +46,8 @@ export type CaptureOrderLine = {
   readonly quantity: number;
   readonly metadata: ReadonlyArray<MetadataItem>;
   readonly totalPrice: { readonly gross: Money };
+  /** The line's own price before discounts (R12 compares the fee line's own price). */
+  readonly undiscountedTotalPrice: { readonly gross: Money };
 };
 
 export type CaptureOrderTransaction = {
@@ -397,7 +399,16 @@ export const decideCapture = (input: DecideCaptureInput): CaptureDecision => {
     });
   }
 
-  // R12 PayPal fee on the ORDER lines; productVariantId keeps the ID of a deleted variant.
+  /*
+   * R12 PayPal fee on the ORDER lines; productVariantId keeps the ID of a deleted variant.
+   *
+   * The fee line's own price is OrderLine.undiscountedTotalPrice.gross. Saleor 3.22 fixes it at
+   * checkout completion from the LIVE custom price (checkout/complete_checkout.py :313-357), not
+   * from the checkout line's stored copy, so it does not lag. With prices entered with tax (dess)
+   * a tax exemption does not reduce it: tax/calculations/__init__.py :25-49 keeps the gross equal
+   * to the custom price, and a later re-pricing (DRAFT/UNCONFIRMED orders only,
+   * order/calculations.py :76) keeps the gross too (`_remove_tax_net`, :524-541).
+   */
   const orderTotalMinor = toMinor(order.total.gross);
   const paymentFee = verifyPaymentFee(
     {
@@ -407,6 +418,7 @@ export const decideCapture = (input: DecideCaptureInput): CaptureDecision => {
         quantity: line.quantity,
         metadata: line.metadata,
         totalPrice: line.totalPrice,
+        undiscountedTotalPrice: line.undiscountedTotalPrice.gross,
       })),
     },
     gate,
@@ -434,6 +446,7 @@ export const decideCapture = (input: DecideCaptureInput): CaptureDecision => {
     return hold("R12", "fee-invalid", {
       feeReason: paymentFee.reason,
       expectedFeeCents: paymentFee.expectedFeeCents,
+      ownFeeCents: paymentFee.ownFeeCents,
       lineFeeCents: paymentFee.lineFeeCents,
     });
   }

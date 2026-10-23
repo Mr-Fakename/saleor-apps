@@ -117,6 +117,7 @@ const productLine = {
   variant: { id: "UHJvZHVjdFZhcmlhbnQ6MTI=" },
   metadata: [],
   totalPrice: { gross: usd(100) },
+  undiscountedTotalPrice: usd(100),
 };
 
 const feeLine = (amount: number) => ({
@@ -125,6 +126,7 @@ const feeLine = (amount: number) => ({
   variant: { id: FEE_VARIANT_ID },
   metadata: [{ key: "payment_fee_type", value: "paypal_1.5_percent" }],
   totalPrice: { gross: usd(amount) },
+  undiscountedTotalPrice: usd(amount),
 });
 
 type FeeCase = "ABSENT" | "VALID" | "INVALID";
@@ -567,6 +569,27 @@ describe("TransactionInitializeSessionUseCase: PayPal-fee gate (A3c)", () => {
           payment_method_types: ["paypal"],
           payment_method_options: { paypal: { capture_method: undefined } },
         },
+      });
+    });
+
+    it("A12: allows PayPal when an order-level voucher discounted the fee line (own 1.36, line 1.22)", async () => {
+      // A 10 % ENTIRE_ORDER voucher spread over both lines: base 90.59, fee 1.5 % = 1.36.
+      givenCheckout({
+        ...checkoutWithFee("ABSENT"),
+        totalPrice: { gross: usd(91.81) },
+        lines: [
+          { ...productLine, totalPrice: { gross: usd(84.69) }, undiscountedTotalPrice: usd(94.1) },
+          { ...feeLine(1.22), undiscountedTotalPrice: usd(1.36) },
+        ],
+      });
+
+      const result = await execute(event({ paymentMethod: "paypal" }), GATE);
+
+      expect(handedOut(result)).toBe("pi_created");
+      expect(createdParams()).toMatchObject({
+        metadata: { saleor_payment_policy: "paypal-only" },
+        stripeMoney: StripeMoney.createFromSaleorAmount({ amount: 91.81, currency: "USD" })._unsafeUnwrap(),
+        intentParams: { payment_method_types: ["paypal"] },
       });
     });
 

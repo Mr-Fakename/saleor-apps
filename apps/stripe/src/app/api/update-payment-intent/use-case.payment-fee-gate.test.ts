@@ -65,6 +65,7 @@ const productLine = {
   variant: { id: "UHJvZHVjdFZhcmlhbnQ6MTI=" },
   metadata: [],
   totalPrice: { gross: eur(210) },
+  undiscountedTotalPrice: eur(210),
 };
 
 const feeLine = (amount: number) => ({
@@ -73,6 +74,7 @@ const feeLine = (amount: number) => ({
   variant: { id: FEE_VARIANT_ID },
   metadata: [{ key: "payment_fee_type", value: "paypal_1.5_percent" }],
   totalPrice: { gross: eur(amount) },
+  undiscountedTotalPrice: eur(amount),
 });
 
 type FeeCase = "ABSENT" | "VALID" | "INVALID";

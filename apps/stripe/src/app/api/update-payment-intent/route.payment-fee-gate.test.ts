@@ -132,6 +132,7 @@ const checkoutResponse = (args: { total: number; feeAmount: number | null }) => 
             variant: { id: "UHJvZHVjdFZhcmlhbnQ6MTI=" },
             metadata: [],
             totalPrice: { gross: money(210) },
+            undiscountedTotalPrice: money(210),
           },
           ...(args.feeAmount === null
             ? []
@@ -142,6 +143,7 @@ const checkoutResponse = (args: { total: number; feeAmount: number | null }) => 
                   variant: { id: "UHJvZHVjdFZhcmlhbnQ6NDQ5" },
                   metadata: [{ key: "payment_fee_type", value: "paypal_1.5_percent" }],
                   totalPrice: { gross: money(args.feeAmount) },
+                  undiscountedTotalPrice: money(args.feeAmount),
                 },
               ]),
         ],

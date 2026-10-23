@@ -31,6 +31,7 @@ const lines = [
     variant: { id: "UHJvZHVjdFZhcmlhbnQ6NDQ5" },
     metadata: [{ key: "payment_fee_type", value: "paypal_1.5_percent" }],
     totalPrice: { gross: { amount: 3.15, currency: "EUR" } },
+    undiscountedTotalPrice: { amount: 3.15, currency: "EUR" },
   },
 ];
 
@@ -76,6 +77,9 @@ describe("CheckoutPaymentStateFetcher: query choice", () => {
     expect(body.operationName).toBe("FetchCheckoutPaymentStateWithLines");
     expect(body.variables).toStrictEqual({ checkoutId: checkout.id });
     expect(body.query).toMatch(/\blines\s*\{/);
+    // The fee rule compares the fee line's own price (an order-level voucher spreads over it).
+    // (urql appends __typename to each selection when it sends the document.)
+    expect(body.query).toMatch(/\bundiscountedTotalPrice\s*\{\s*amount\s+currency\b/);
     expect(result._unsafeUnwrap()).toStrictEqual({ ...checkout, lines });
   });
 

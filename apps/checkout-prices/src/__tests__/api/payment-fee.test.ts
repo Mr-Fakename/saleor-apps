@@ -238,12 +238,26 @@ describe("POST /api/payment-fee", () => {
     });
   });
 
-  describe("in-place fee-line update (A2c)", () => {
-    // A delete-then-add leaves a moment with NO fee line, in which a concurrent
-    // PaymentIntent resync can read a fee-less total. One checkoutLinesUpdate
-    // changes the existing line atomically.
+  describe("replace a stale fee line, never change its price in place (A2c kept)", () => {
+    // The Stripe app compares the fee line's OWN price (undiscountedTotalPrice). Saleor 3.22
+    // stores a copy of it that an in-place price change can leave stale, while the INSERT
+    // writes it from the custom price: so a stale line is swapped (add, then delete the
+    // snapshot's fee lines). In between the checkout holds two fee lines (refused by the
+    // Stripe app: fails closed), never none.
 
-    it("fixes a single stale fee line with ONE checkoutLinesUpdate — no delete, no add", async () => {
+    const updatesWithPrice = () =>
+      fakeSaleor.calls.filter(
+        (c) =>
+          c.name === "CheckoutLinesUpdate" &&
+          Array.isArray(c.variables.lines) &&
+          (c.variables.lines as Array<Record<string, unknown>>).some((line) => "price" in line),
+      );
+
+    afterEach(() => {
+      expect(updatesWithPrice()).toStrictEqual([]);
+    });
+
+    it("swaps a single stale fee line: add the new line, then delete the snapshot line", async () => {
       const checkout = seedCheckout();
       const stale = fakeSaleor.newLine(FEE_VARIANT_ID, 1, 2, feeMetadata());
 
@@ -252,20 +266,24 @@ describe("POST /api/payment-fee", () => {
       const res = await callFee({ checkoutId: checkout.id, apply: true });
 
       expect(res._status).toBe(200);
-      expect(fakeSaleor.mutationNames()).toStrictEqual(["CheckoutLinesUpdate"]);
-      expect(fakeSaleor.calls.find((c) => c.name === "CheckoutLinesUpdate")?.variables).toMatchObject({
+      expect(fakeSaleor.mutationNames()).toStrictEqual(["AddLinesToCheckout", "CheckoutLinesDelete"]);
+      expect(fakeSaleor.calls.find((c) => c.name === "AddLinesToCheckout")?.variables).toMatchObject({
+        id: checkout.id,
+        lines: [{ variantId: FEE_VARIANT_ID, quantity: 1, price: "3.15", forceNewLine: true }],
+      });
+      expect(fakeSaleor.calls.find((c) => c.name === "CheckoutLinesDelete")?.variables).toStrictEqual({
         checkoutId: checkout.id,
-        lines: [{ lineId: stale.id, price: "3.15", quantity: 1 }],
+        lineIds: [stale.id],
       });
       const lines = feeLines(checkout.id);
 
       expect(lines).toHaveLength(1);
-      expect(lines[0].id).toBe(stale.id);
+      expect(lines[0].id).not.toBe(stale.id);
       expect(lines[0].unitPrice).toBe(3.15);
       expect(res._json).toMatchObject({ checkout: { id: checkout.id } });
     });
 
-    it("an idempotent re-call after the update performs no mutation", async () => {
+    it("an idempotent re-call after the swap performs no mutation", async () => {
       const checkout = seedCheckout();
 
       checkout.lines.push(fakeSaleor.newLine(FEE_VARIANT_ID, 1, 2, feeMetadata()));
@@ -279,7 +297,7 @@ describe("POST /api/payment-fee", () => {
       expect(feeLines(checkout.id).map((l) => l.unitPrice)).toStrictEqual([3.15]);
     });
 
-    it("refreshes a stale rate marker in the same single update", async () => {
+    it("replaces a line with a stale rate marker", async () => {
       const checkout = seedCheckout();
       const stale = fakeSaleor.newLine(FEE_VARIANT_ID, 1, 6.09, feeMetadata("paypal_2.9_percent"));
 
@@ -288,10 +306,10 @@ describe("POST /api/payment-fee", () => {
       const res = await callFee({ checkoutId: checkout.id, apply: true });
 
       expect(res._status).toBe(200);
-      expect(fakeSaleor.mutationNames()).toStrictEqual(["CheckoutLinesUpdate"]);
+      expect(fakeSaleor.mutationNames()).toStrictEqual(["AddLinesToCheckout", "CheckoutLinesDelete"]);
       const [line] = feeLines(checkout.id);
 
-      expect(line.id).toBe(stale.id);
+      expect(line.id).not.toBe(stale.id);
       expect(line.unitPrice).toBe(3.15);
       expect(recordOfMetadata(line.metadata)).toStrictEqual({
         [FEE_KEY]: "paypal_1.5_percent",
@@ -300,7 +318,7 @@ describe("POST /api/payment-fee", () => {
       });
     });
 
-    it("resets a single fee line's quantity in the same update", async () => {
+    it("replaces a fee line whose quantity was changed", async () => {
       const checkout = seedCheckout();
 
       checkout.lines.push(fakeSaleor.newLine(FEE_VARIANT_ID, 2, 3.15, feeMetadata()));
@@ -308,11 +326,11 @@ describe("POST /api/payment-fee", () => {
       const res = await callFee({ checkoutId: checkout.id, apply: true });
 
       expect(res._status).toBe(200);
-      expect(fakeSaleor.mutationNames()).toStrictEqual(["CheckoutLinesUpdate"]);
+      expect(fakeSaleor.mutationNames()).toStrictEqual(["AddLinesToCheckout", "CheckoutLinesDelete"]);
       expect(feeLines(checkout.id).map((l) => [l.quantity, l.unitPrice])).toStrictEqual([[1, 3.15]]);
     });
 
-    it("still replaces (delete + add) a single fee line that is not on the fee variant", async () => {
+    it("replaces a single fee line that is not on the fee variant (add first, then delete)", async () => {
       const checkout = seedCheckout();
 
       checkout.lines.push(fakeSaleor.newLine(OLD_FEE_VARIANT_ID, 1, 3.15, feeMetadata()));
@@ -320,38 +338,200 @@ describe("POST /api/payment-fee", () => {
       const res = await callFee({ checkoutId: checkout.id, apply: true });
 
       expect(res._status).toBe(200);
-      expect(fakeSaleor.mutationNames()).toStrictEqual(["CheckoutLinesDelete", "AddLinesToCheckout"]);
+      expect(fakeSaleor.mutationNames()).toStrictEqual(["AddLinesToCheckout", "CheckoutLinesDelete"]);
       expect(feeLines(checkout.id).map((l) => [l.variantId, l.unitPrice])).toStrictEqual([[FEE_VARIANT_ID, 3.15]]);
     });
 
-    it("converges to one fee line when a concurrent call added one during the update", async () => {
+    it("is never without a fee line: the delete sees the new line already there", async () => {
+      const checkout = seedCheckout();
+
+      checkout.lines.push(fakeSaleor.newLine(FEE_VARIANT_ID, 1, 2, feeMetadata()));
+      const feeLineCounts: number[] = [];
+
+      fakeSaleor.beforeLinesDelete = (c) => {
+        feeLineCounts.push(c.lines.filter((l) => l.metadata.some((m) => m.key === FEE_KEY)).length);
+      };
+
+      await callFee({ checkoutId: checkout.id, apply: true });
+
+      expect(feeLineCounts).toStrictEqual([2]);
+    });
+
+    it("deletes only the snapshot's fee lines, never one a concurrent call added", async () => {
       const checkout = seedCheckout();
       const stale = fakeSaleor.newLine(FEE_VARIANT_ID, 1, 2, feeMetadata());
 
       checkout.lines.push(stale);
-      fakeSaleor.beforeLinesUpdate = (c) => {
-        fakeSaleor.beforeLinesUpdate = null;
+      fakeSaleor.beforeLinesAdd = (c) => {
+        fakeSaleor.beforeLinesAdd = null;
+        // another call's fresh fee line, added after our snapshot
         c.lines.push(fakeSaleor.newLine(FEE_VARIANT_ID, 1, 3.15, feeMetadata()));
       };
 
       const res = await callFee({ checkoutId: checkout.id, apply: true });
 
       expect(res._status).toBe(200);
-      expect(feeLines(checkout.id).map((l) => [l.id, l.unitPrice])).toStrictEqual([[stale.id, 3.15]]);
+      const deletes = fakeSaleor.calls.filter((c) => c.name === "CheckoutLinesDelete");
+
+      expect(deletes[0]?.variables).toStrictEqual({ checkoutId: checkout.id, lineIds: [stale.id] });
+      expect(feeLines(checkout.id).map((l) => l.unitPrice)).toStrictEqual([3.15]);
     });
 
-    it("a failed update reports an error and leaves the existing fee line in place", async () => {
+    it("converges on one fee line when a concurrent swap removed the stale line first", async () => {
+      const checkout = seedCheckout();
+      const stale = fakeSaleor.newLine(FEE_VARIANT_ID, 1, 2, feeMetadata());
+      const concurrent = fakeSaleor.newLine(FEE_VARIANT_ID, 1, 3.15, feeMetadata());
+
+      checkout.lines.push(stale);
+      fakeSaleor.beforeLinesAdd = (c) => {
+        fakeSaleor.beforeLinesAdd = null;
+        // the other call's whole swap ran first: its line added, the stale line deleted
+        c.lines.push(concurrent);
+        c.lines = c.lines.filter((l) => l.id !== stale.id);
+      };
+
+      const res = await callFee({ checkoutId: checkout.id, apply: true });
+
+      expect(res._status).toBe(200);
+      // keep-oldest: the other call's line stays, ours is the duplicate
+      expect(feeLines(checkout.id).map((l) => [l.id, l.unitPrice])).toStrictEqual([[concurrent.id, 3.15]]);
+    });
+
+    it("two concurrent re-applies on a stale line converge on one fee line", async () => {
+      const checkout = seedCheckout();
+
+      checkout.lines.push(fakeSaleor.newLine(FEE_VARIANT_ID, 1, 2, feeMetadata()));
+
+      const [first, second] = await Promise.all([
+        callFee({ checkoutId: checkout.id, apply: true }),
+        callFee({ checkoutId: checkout.id, apply: true }),
+      ]);
+
+      expect([first._status, second._status]).toStrictEqual([200, 200]);
+      expect(feeLines(checkout.id).map((l) => [l.quantity, l.unitPrice])).toStrictEqual([[1, 3.15]]);
+    });
+
+    it("a failed add changes nothing and reports an error", async () => {
       const checkout = seedCheckout();
       const stale = fakeSaleor.newLine(FEE_VARIANT_ID, 1, 2, feeMetadata());
 
       checkout.lines.push(stale);
-      fakeSaleor.failingOperations.add("CheckoutLinesUpdate");
+      fakeSaleor.failingOperations.add("AddLinesToCheckout");
 
       const res = await callFee({ checkoutId: checkout.id, apply: true });
 
       expect(res._status).toBe(400);
-      expect(fakeSaleor.mutationNames()).toStrictEqual(["CheckoutLinesUpdate"]);
+      expect(fakeSaleor.mutationNames()).toStrictEqual(["AddLinesToCheckout"]);
       expect(feeLines(checkout.id).map((l) => l.id)).toStrictEqual([stale.id]);
+    });
+
+    it("a failed delete after the add reports an error; the two fee lines fail closed and a re-apply repairs them", async () => {
+      const checkout = seedCheckout();
+      const stale = fakeSaleor.newLine(FEE_VARIANT_ID, 1, 2, feeMetadata());
+
+      checkout.lines.push(stale);
+      fakeSaleor.failingOperations.add("CheckoutLinesDelete");
+
+      const res = await callFee({ checkoutId: checkout.id, apply: true });
+
+      expect(res._status).toBe(409);
+      expect(feeLines(checkout.id).map((l) => l.unitPrice)).toStrictEqual([2, 3.15]);
+
+      fakeSaleor.failingOperations.clear();
+      const repaired = await callFee({ checkoutId: checkout.id, apply: true });
+
+      expect(repaired._status).toBe(200);
+      expect(feeLines(checkout.id).map((l) => l.unitPrice)).toStrictEqual([3.15]);
+    });
+  });
+
+  describe("order-level voucher spread over the fee line (A12)", () => {
+    // 94.10 of product + 5.90 shipping, ENTIRE_ORDER voucher 10 % (apply_once_per_order=false):
+    // the fee-exclusive base is 84.69 + 5.90 = 90.59, so the fee is 1.36; Saleor spreads the
+    // voucher over the fee line too (1.36 -> 1.22), and the total is 91.81.
+    function seedVoucheredCheckout() {
+      const checkout = fakeSaleor.addCheckout({ shipping: 5.9, voucher: { type: "PERCENTAGE", value: 10 } });
+
+      checkout.lines.push(fakeSaleor.newLine(PRODUCT_VARIANT_ID, 1, 94.1));
+
+      return checkout;
+    }
+
+    it("A12: writes the fee 1.36 as the line's own price; Saleor shows it at 1.22, total 91.81", async () => {
+      const checkout = seedVoucheredCheckout();
+
+      const res = await callFee({ checkoutId: checkout.id, apply: true });
+
+      expect(res._status).toBe(200);
+      expect(fakeSaleor.mutationNames()).toStrictEqual(["AddLinesToCheckout"]);
+      const [line] = feeLines(checkout.id);
+
+      expect(line.unitPrice).toBe(1.36);
+      expect(fakeSaleor.lineTotal(checkout, line)).toBe(1.22);
+      expect(fakeSaleor.total(checkout)).toBe(91.81);
+    });
+
+    it("A12: a re-call performs no mutation (the fee line's own price is the fee)", async () => {
+      const checkout = seedVoucheredCheckout();
+
+      await callFee({ checkoutId: checkout.id, apply: true });
+      fakeSaleor.calls = [];
+
+      const res = await callFee({ checkoutId: checkout.id, apply: true });
+
+      expect(res._status).toBe(200);
+      expect(fakeSaleor.mutationNames()).toStrictEqual([]);
+      expect(feeLines(checkout.id).map((l) => l.unitPrice)).toStrictEqual([1.36]);
+    });
+
+    it("A12b: a fee written before the voucher (own 1.50, shown 1.35, total 91.94) is swapped for 1.36", async () => {
+      const checkout = seedVoucheredCheckout();
+      const before = fakeSaleor.newLine(FEE_VARIANT_ID, 1, 1.5, feeMetadata());
+
+      checkout.lines.push(before);
+      expect(fakeSaleor.total(checkout)).toBe(91.94);
+
+      const res = await callFee({ checkoutId: checkout.id, apply: true });
+
+      expect(res._status).toBe(200);
+      expect(fakeSaleor.mutationNames()).toStrictEqual(["AddLinesToCheckout", "CheckoutLinesDelete"]);
+      expect(feeLines(checkout.id).map((l) => l.unitPrice)).toStrictEqual([1.36]);
+      expect(fakeSaleor.total(checkout)).toBe(91.81);
+      expect(fakeSaleor.calls.filter((c) => c.name === "CheckoutLinesUpdate")).toStrictEqual([]);
+    });
+
+    it("swaps again when the spread moved the base (FIXED voucher): one correction", async () => {
+      // 99.66 of product, FIXED voucher 10.00. Without a fee line the base is 89.66 (fee 1.34);
+      // once the fee line takes its share of the voucher the base is 89.79 (fee 1.35).
+      const checkout = fakeSaleor.addCheckout({ shipping: 0, voucher: { type: "FIXED", value: 10 } });
+
+      checkout.lines.push(fakeSaleor.newLine(PRODUCT_VARIANT_ID, 1, 99.66));
+
+      const res = await callFee({ checkoutId: checkout.id, apply: true });
+
+      expect(res._status).toBe(200);
+      expect(fakeSaleor.mutationNames()).toStrictEqual(["AddLinesToCheckout", "AddLinesToCheckout", "CheckoutLinesDelete"]);
+      const [line] = feeLines(checkout.id);
+      const baseCents = Math.round(fakeSaleor.total(checkout) * 100) - Math.round(fakeSaleor.lineTotal(checkout, line) * 100);
+
+      expect(line.unitPrice).toBe(1.35);
+      expect(baseCents).toBe(8979);
+    });
+
+    it("stops after 2 correction swaps and returns the latest state (the Stripe app stays the judge)", async () => {
+      const checkout = seedCheckout();
+
+      // A concurrent change moves the base after every write.
+      fakeSaleor.beforeLinesAdd = (c) => {
+        c.shipping += 1;
+      };
+
+      const res = await callFee({ checkoutId: checkout.id, apply: true });
+
+      expect(res._status).toBe(200);
+      expect(fakeSaleor.calls.filter((c) => c.name === "AddLinesToCheckout")).toHaveLength(3);
+      expect(feeLines(checkout.id)).toHaveLength(1);
+      expect(res._json).toMatchObject({ checkout: { id: checkout.id } });
     });
   });
 

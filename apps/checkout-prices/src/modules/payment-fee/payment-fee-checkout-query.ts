@@ -11,18 +11,25 @@ import { parse } from "graphql";
 
 type Money = { gross: { amount: number; currency: string } };
 
+export type PaymentFeeCheckoutLine = {
+  id: string;
+  variant: { id: string };
+  quantity: number;
+  metadata: Array<{ key: string; value: string }>;
+  /** After every discount, an order-level voucher spread over the line included. */
+  totalPrice: Money;
+  /** The line's own price before discounts: the fee line's custom price. */
+  undiscountedTotalPrice: { amount: number; currency: string };
+};
+
+export type PaymentFeeCheckout = {
+  id: string;
+  totalPrice: Money;
+  lines: Array<PaymentFeeCheckoutLine>;
+};
+
 export type PaymentFeeCheckoutQuery = {
-  checkout?: {
-    id: string;
-    totalPrice: Money;
-    lines: Array<{
-      id: string;
-      variant: { id: string };
-      quantity: number;
-      metadata: Array<{ key: string; value: string }>;
-      totalPrice: Money;
-    }>;
-  } | null;
+  checkout?: PaymentFeeCheckout | null;
 };
 
 export type PaymentFeeCheckoutQueryVariables = { id: string };
@@ -53,6 +60,10 @@ export const PaymentFeeCheckoutDocument: TypedDocumentNode<PaymentFeeCheckoutQue
               amount
               currency
             }
+          }
+          undiscountedTotalPrice {
+            amount
+            currency
           }
         }
       }

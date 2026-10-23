@@ -11,6 +11,7 @@ import { handleCors } from "../../lib/cors";
 import { getVariantPrice } from "../../lib/get-variant-price";
 import { DEFAULT_CHANNEL, SALEOR_API_URL } from "../../const";
 import { apl } from "../../saleor-app";
+import { isPaymentFeeVariant } from "../../modules/payment-fee/payment-fee";
 
 type SuccessfulResponse = {
   checkout: CheckoutDetailsFragment;
@@ -45,6 +46,14 @@ export default async function handler(
   if (!variantId) {
     console.error("Variant Id has not been specified");
     return res.status(400).json({ errorMessage: "variantId has not been provided" });
+  }
+
+  // Only /api/payment-fee adds the payment-fee variant, always as a new line. Here
+  // Saleor would merge into the existing fee line and set a tier price on it in
+  // place, which the Stripe app's own-price check cannot allow.
+  if (isPaymentFeeVariant(variantId)) {
+    console.warn("Refusing to add the payment-fee variant through add-to-cart");
+    return res.status(400).json({ errorMessage: "The payment-fee variant cannot be added to the cart" });
   }
 
   const quantity = req.body.quantity;

@@ -17,6 +17,7 @@ import { apl } from "../../saleor-app";
 import { readCableProductSlug } from "../../modules/cable/cable-config";
 import { CableLineKindDocument } from "../../modules/cable/cable-documents";
 import { hasCableMarker } from "../../modules/cable/cable-line-marker";
+import { isPaymentFeeVariant } from "../../modules/payment-fee/payment-fee";
 
 type SuccessfulResponse = {
   checkout: CheckoutDetailsFragment;
@@ -139,6 +140,14 @@ export default async function handler(
   }
 
   const variantId = line.variant.id;
+
+  // The payment-fee line belongs to /api/payment-fee, which replaces it and never
+  // changes its price in place (the Stripe app checks its own price). A quantity
+  // or tier price written here would do exactly that.
+  if (isPaymentFeeVariant(variantId)) {
+    console.warn("Refusing to update the payment-fee line; it is managed by /api/payment-fee");
+    return res.status(400).json({ errorMessage: "The payment-fee line cannot be updated here" });
+  }
 
   // Is this a configured cable? Decided from data a shopper cannot write: the
   // line's product slug and the app's PRIVATE marker. The public

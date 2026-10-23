@@ -226,9 +226,10 @@ export class StripeRefundHandler {
      * A2e round 2 (P1): Saleor links this report to its granted refund only through a
      * REFUND_REQUEST that already carries the same pspReference when the report arrives
      * (transaction_event_report.py get_related_granted_refund), never later. Before Saleor tags
-     * its request with the refund id (the app answered 503 and Saleor re-sends 10-310 s later,
-     * or this event beat the app's answer), a report here would stay unlinked: the granted
-     * refund would stay PENDING for good, and Saleor refuses to retry or edit it. Deferred
+     * its request with the refund id (this event beat the app's answer; after a 503, Saleor's
+     * re-send arrives with an EMPTY body and tags nothing, saleor/core/models.py:199-203), a
+     * report here would stay unlinked: the granted refund would stay PENDING for good, and
+     * Saleor refuses to retry or edit it. Deferred
      * instead, while Saleor can still tag the request: Stripe re-sends the event (non-2xx).
      * Not for a refund kept under the PaymentIntent (recorded before A2e), nor when Saleor has
      * no such transaction. Past the window the report goes ahead, so no refund is dropped.

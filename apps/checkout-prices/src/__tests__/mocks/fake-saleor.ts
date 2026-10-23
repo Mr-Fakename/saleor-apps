@@ -22,6 +22,16 @@ export interface FakeLine {
   privateMetadata: Metadata;
 }
 
+/**
+ * An ENTIRE_ORDER voucher with apply_once_per_order=false. Saleor 3.22 spreads it over ALL lines
+ * in proportion and gives the rounding remainder to the last line
+ * (checkout/base_calculations.py _propagate_checkout_discount_on_checkout_lines_prices).
+ */
+export interface FakeVoucher {
+  type: "PERCENTAGE" | "FIXED";
+  value: number;
+}
+
 export interface FakeCheckout {
   id: string;
   channelSlug: string;
@@ -29,6 +39,7 @@ export interface FakeCheckout {
   shipping: number;
   /** Checkout.languageCode (e.g. "EN"); absent = unset */
   languageCode?: string;
+  voucher?: FakeVoucher;
   lines: FakeLine[];
 }
 
@@ -112,6 +123,8 @@ function operationName(doc: DocumentNode): string {
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
+// Saleor quantize_price: ROUND_HALF_UP (the epsilon keeps 9.546 -> 9.55 under float noise).
+const quantize = (n: number) => Math.round(n * 100 + 1e-9) / 100;
 
 const money = (amount: number, currency: string) => ({ gross: { amount: round2(amount), currency } });
 
@@ -133,6 +146,8 @@ export class FakeSaleor {
   beforeLinesAdd: ((checkout: FakeCheckout) => void) | null = null;
   /** test hook: runs before checkoutLinesUpdate applies its changes */
   beforeLinesUpdate: ((checkout: FakeCheckout) => void) | null = null;
+  /** test hook: runs before checkoutLinesDelete removes its lines */
+  beforeLinesDelete: ((checkout: FakeCheckout) => void) | null = null;
   /** test hook: operation names that fail with a transport error */
   failingOperations = new Set<string>();
   /** test hook: operation names that fail ONCE with a transport error, then work */
@@ -158,6 +173,7 @@ export class FakeSaleor {
     this.calls = [];
     this.beforeLinesAdd = null;
     this.beforeLinesUpdate = null;
+    this.beforeLinesDelete = null;
     this.failingOperations.clear();
     this.failingOperationsOnce.clear();
     this.hiddenFromNames.clear();
@@ -182,6 +198,7 @@ export class FakeSaleor {
       currency: partial.currency ?? "EUR",
       shipping: partial.shipping ?? 0,
       languageCode: partial.languageCode,
+      voucher: partial.voucher,
       lines: partial.lines ?? [],
     };
 
@@ -249,7 +266,8 @@ export class FakeSaleor {
                     variant: { id: line.variantId },
                     quantity: line.quantity,
                     metadata: line.metadata,
-                    totalPrice: money(line.unitPrice * line.quantity, checkout.currency),
+                    totalPrice: money(this.lineTotal(checkout, line), checkout.currency),
+                    undiscountedTotalPrice: { amount: round2(line.unitPrice * line.quantity), currency: checkout.currency },
                   })),
                 }
               : null,
@@ -389,6 +407,7 @@ export class FakeSaleor {
             },
           };
         }
+        this.beforeLinesDelete?.(checkout);
         checkout.lines = checkout.lines.filter((l) => !lineIds.includes(l.id));
 
         return { data: { checkoutLinesDelete: { checkout: this.checkoutDetails(checkout), errors: [] } } };
@@ -505,8 +524,40 @@ export class FakeSaleor {
     return checkout ? checkout.lines.filter((l) => l.metadata.some((m) => m.key === key)) : [];
   }
 
+  /** Saleor checkout total: the lines after the voucher spread, plus shipping. */
   total(checkout: FakeCheckout): number {
-    return round2(checkout.lines.reduce((sum, l) => sum + l.unitPrice * l.quantity, 0) + checkout.shipping);
+    return round2(checkout.lines.reduce((sum, l) => sum + this.lineTotal(checkout, l), 0) + checkout.shipping);
+  }
+
+  /** CheckoutLine.totalPrice: the line own price (unit price × quantity) minus its voucher share. */
+  lineTotal(checkout: FakeCheckout, line: FakeLine): number {
+    const own = line.unitPrice * line.quantity;
+    const { voucher } = checkout;
+
+    if (!voucher) {
+      return round2(own);
+    }
+    const owns = checkout.lines.map((l) => round2(l.unitPrice * l.quantity));
+    const subtotal = round2(owns.reduce((sum, value) => sum + value, 0));
+    const discount =
+      voucher.type === "PERCENTAGE" ? quantize((subtotal * voucher.value) / 100) : Math.min(voucher.value, subtotal);
+    const index = checkout.lines.indexOf(line);
+
+    if (checkout.lines.length === 1) {
+      return round2(Math.max(owns[0] - discount, 0));
+    }
+    let remaining = discount;
+
+    for (let i = 0; i < checkout.lines.length - 1; i += 1) {
+      const share = subtotal ? quantize(Math.min((owns[i] / subtotal) * discount, owns[i])) : 0;
+
+      if (i === index) {
+        return round2(Math.max(owns[i] - share, 0));
+      }
+      remaining = round2(remaining - share);
+    }
+
+    return round2(Math.max(owns[index] - remaining, 0));
   }
 
   private buildLines(rawLines: unknown): { lines: FakeLine[] } | { error: string } {
@@ -565,12 +616,12 @@ export class FakeSaleor {
           variant: variant ? this.variantDetails(variant) : null,
           quantity: line.quantity,
           metadata: line.metadata,
-          unitPrice: money(line.unitPrice, checkout.currency),
-          totalPrice: money(line.unitPrice * line.quantity, checkout.currency),
+          unitPrice: money(this.lineTotal(checkout, line) / line.quantity, checkout.currency),
+          totalPrice: money(this.lineTotal(checkout, line), checkout.currency),
         };
       }),
       subtotalPrice: money(
-        checkout.lines.reduce((sum, l) => sum + l.unitPrice * l.quantity, 0),
+        checkout.lines.reduce((sum, l) => sum + this.lineTotal(checkout, l), 0),
         checkout.currency,
       ),
     };

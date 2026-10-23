@@ -69,6 +69,13 @@ query FetchCaptureTransaction($transactionId: ID!) {
             currency
           }
         }
+        # The fee line's own price, fixed at checkout completion: R12 compares it.
+        undiscountedTotalPrice {
+          gross {
+            amount
+            currency
+          }
+        }
       }
       transactions {
         id

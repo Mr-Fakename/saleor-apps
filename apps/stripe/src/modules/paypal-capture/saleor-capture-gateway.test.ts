@@ -1,3 +1,4 @@
+import { print } from "graphql";
 import { CombinedError } from "urql";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -52,6 +53,12 @@ describe("SaleorCaptureGateway", () => {
           { requestPolicy: "network-only", fetch: expect.any(Function) },
         ],
       ]);
+    });
+
+    it("asks for each order line's own price (R12 compares the fee line's own price)", () => {
+      const printed = print(FetchCaptureTransactionDocument).replace(/\s+/g, " ");
+
+      expect(printed).toContain("undiscountedTotalPrice { gross { amount currency } }");
     });
 
     it("resolves null when Saleor has no such transaction", async () => {

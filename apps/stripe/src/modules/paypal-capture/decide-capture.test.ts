@@ -64,21 +64,38 @@ const record = (overrides: Partial<CaptureRecord> = {}): CaptureRecord => ({
   ...overrides,
 });
 
-const productLine = (amount: number, overrides: Partial<CaptureOrderLine> = {}): CaptureOrderLine => ({
-  productVariantId: PRODUCT_VARIANT_ID,
-  quantity: 1,
-  metadata: [],
-  totalPrice: { gross: eur(amount) },
-  ...overrides,
-});
+// Without an order-level discount the own price (undiscountedTotalPrice) equals the total.
+const productLine = (amount: number, overrides: Partial<CaptureOrderLine> = {}): CaptureOrderLine => {
+  const totalPrice = overrides.totalPrice ?? { gross: eur(amount) };
 
-const feeLine = (amount: number, overrides: Partial<CaptureOrderLine> = {}): CaptureOrderLine => ({
-  productVariantId: FEE_VARIANT_ID,
-  quantity: 1,
-  metadata: [{ key: "payment_fee_type", value: "paypal_1.5_percent" }],
-  totalPrice: { gross: eur(amount) },
-  ...overrides,
-});
+  return {
+    productVariantId: PRODUCT_VARIANT_ID,
+    quantity: 1,
+    metadata: [],
+    totalPrice,
+    undiscountedTotalPrice: totalPrice,
+    ...overrides,
+  };
+};
+
+const feeLine = (amount: number, overrides: Partial<CaptureOrderLine> = {}): CaptureOrderLine => {
+  const totalPrice = overrides.totalPrice ?? { gross: eur(amount) };
+
+  return {
+    productVariantId: FEE_VARIANT_ID,
+    quantity: 1,
+    metadata: [{ key: "payment_fee_type", value: "paypal_1.5_percent" }],
+    totalPrice,
+    undiscountedTotalPrice: totalPrice,
+    ...overrides,
+  };
+};
+
+/** Order lines of case A12: a 10 % ENTIRE_ORDER voucher spread over the product and the fee. */
+const voucheredLines = (fee: { own: number; discounted: number }): CaptureOrderLine[] => [
+  productLine(84.69, { undiscountedTotalPrice: { gross: eur(94.1) } }),
+  feeLine(fee.discounted, { undiscountedTotalPrice: { gross: eur(fee.own) } }),
+];
 
 const orderTransaction = (overrides: Partial<CaptureOrderTransaction> = {}): CaptureOrderTransaction => ({
   id: TX_ID,
@@ -528,6 +545,59 @@ describe("decideCapture (A3d)", () => {
         outcome: "hold",
         rule: "R12",
         reason: "fee-invalid",
+      });
+    });
+
+    describe("with an order-level voucher spread over the fee line (A12)", () => {
+      it("A12: own 1.36 = the fee on the base 90.59, discounted 1.22, order 91.81 authorized -> capture", () => {
+        const pi = paymentIntent({ amount: 91_81, amount_capturable: 91_81 });
+        const tx = transaction({
+          authorizedAmount: eur(91.81),
+          order: order({
+            total: { gross: eur(91.81) },
+            lines: voucheredLines({ own: 1.36, discounted: 1.22 }),
+            transactions: [orderTransaction({ authorizedAmount: eur(91.81) })],
+          }),
+        });
+
+        expect(decide({ paymentIntent: pi, transaction: tx })).toStrictEqual({
+          outcome: "capture",
+          rule: "R13",
+          amount: 91.81,
+          currency: "EUR",
+        });
+      });
+
+      it("A12b: voucher added after initialize (authorized 101.50, order 91.94, own 1.50 / discounted 1.35) -> still a hold", () => {
+        const tx = transaction({
+          order: order({ total: { gross: eur(91.94) }, lines: voucheredLines({ own: 1.5, discounted: 1.35 }) }),
+        });
+
+        expect(decide({ transaction: tx })).toStrictEqual({
+          outcome: "hold",
+          rule: "R12",
+          reason: "fee-invalid",
+          detail: { feeReason: "amount-mismatch", expectedFeeCents: 136, ownFeeCents: 150, lineFeeCents: 135 },
+        });
+      });
+
+      it("holds a fee line whose discounted total is above its own price -> fee-invalid", () => {
+        const pi = paymentIntent({ amount: 92_09, amount_capturable: 92_09 });
+        const tx = transaction({
+          authorizedAmount: eur(92.09),
+          order: order({
+            total: { gross: eur(92.09) },
+            lines: voucheredLines({ own: 1.36, discounted: 1.5 }),
+            transactions: [orderTransaction({ authorizedAmount: eur(92.09) })],
+          }),
+        });
+
+        expect(decide({ paymentIntent: pi, transaction: tx })).toMatchObject({
+          outcome: "hold",
+          rule: "R12",
+          reason: "fee-invalid",
+          detail: { feeReason: "discounted-total-out-of-range" },
+        });
       });
     });
   });

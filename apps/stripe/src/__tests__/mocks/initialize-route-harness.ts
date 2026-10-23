@@ -93,6 +93,7 @@ export const checkoutQueryResponse = (args: { withFee: boolean }) => ({
             variant: { id: "UHJvZHVjdFZhcmlhbnQ6MTI=" },
             metadata: [],
             totalPrice: { gross: eur(100) },
+            undiscountedTotalPrice: eur(100),
           },
           ...(args.withFee
             ? [
@@ -102,6 +103,7 @@ export const checkoutQueryResponse = (args: { withFee: boolean }) => ({
                   variant: { id: ROUTE_FEE_VARIANT_ID },
                   metadata: [{ key: "payment_fee_type", value: "paypal_1.5_percent" }],
                   totalPrice: { gross: eur(1.5) },
+                  undiscountedTotalPrice: eur(1.5),
                 },
               ]
             : []),

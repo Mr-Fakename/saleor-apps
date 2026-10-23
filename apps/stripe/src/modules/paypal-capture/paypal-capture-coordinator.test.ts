@@ -267,7 +267,7 @@ describe("PaypalCaptureCoordinator (A3d)", () => {
           ...transaction.order,
           lines: [
             transaction.order.lines[0],
-            { productVariantId: "UHJvZHVjdFZhcmlhbnQ6OTk=", quantity: 1, metadata: [], totalPrice: { gross: { amount: 1.5, currency: "EUR" } } },
+            { productVariantId: "UHJvZHVjdFZhcmlhbnQ6OTk=", quantity: 1, metadata: [], totalPrice: { gross: { amount: 1.5, currency: "EUR" } }, undiscountedTotalPrice: { gross: { amount: 1.5, currency: "EUR" } } },
           ],
         },
       };

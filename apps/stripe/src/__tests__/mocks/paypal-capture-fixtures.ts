@@ -87,12 +87,13 @@ export const a3dTransaction = (
     status: orderStatus,
     total: { gross: eur(101.5) },
     lines: [
-      { productVariantId: "UHJvZHVjdFZhcmlhbnQ6MTI=", quantity: 1, metadata: [], totalPrice: { gross: eur(100) } },
+      { productVariantId: "UHJvZHVjdFZhcmlhbnQ6MTI=", quantity: 1, metadata: [], totalPrice: { gross: eur(100) }, undiscountedTotalPrice: { gross: eur(100) } },
       {
         productVariantId: A3D_FEE_VARIANT_ID,
         quantity: 1,
         metadata: [{ key: "payment_fee_type", value: "paypal_1.5_percent" }],
         totalPrice: { gross: eur(1.5) },
+        undiscountedTotalPrice: { gross: eur(1.5) },
       },
     ],
     transactions: [

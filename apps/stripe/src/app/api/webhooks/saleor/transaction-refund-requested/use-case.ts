@@ -199,8 +199,9 @@ export class TransactionRefundRequestedUseCase {
     const saleorGrantedRefundId = saleorGrantedRefundIdFromPayload(event.grantedRefund);
 
     /*
-     * Same refund request (Saleor re-send or staff retry) -> same key -> no second refund
-     * (NR-32); another granted refund of the same amount -> another key (review M3).
+     * Same refund request (a staff retry; Saleor's own re-send has an empty body) -> same key
+     * -> no second refund (NR-32); another granted refund of the same amount -> another key
+     * (review M3).
      */
     const idempotencyKey = createStripeRefundIdempotencyKey({
       saleorTransactionId: refundMetadata.saleor_transaction_id,
@@ -224,9 +225,10 @@ export class TransactionRefundRequestedUseCase {
       /*
        * A2e (c): no answer that says whether Stripe created the refund (connection error or
        * timeout, Stripe 5xx, the same key still running). Not a REFUND_FAILURE: the refund may
-       * exist. HTTP 503 makes Saleor re-send this same request, whose idempotency key returns
-       * that refund (RefundOutcomeUnknownResponse). Checked before the idempotency refusal: a
-       * 409 "key in use" is not "key reused with other parameters".
+       * exist. HTTP 503 keeps a false REFUND_FAILURE out of the ledger; Saleor's re-send arrives
+       * with an empty body and cannot be processed (RefundOutcomeUnknownResponse), so a staff
+       * retry, with the same idempotency key, is what returns that refund. Checked before the
+       * idempotency refusal: a 409 "key in use" is not "key reused with other parameters".
        */
       if (isStripeOutcomeUnknown(createRefundResult.error)) {
         this.logger.warn("Stripe refund outcome unknown: asking Saleor to retry the same request", {

@@ -4,10 +4,15 @@
  *
  *   fee = Math.round(base × rate / 100), base = toCents(checkout total) − Σ toCents(fee lines)
  *
+ * The fee lines in the base are counted at their DISCOUNTED total (`totalPrice`). The fee is
+ * written as the fee line's custom price, so it is compared with the line's OWN price
+ * (`undiscountedTotalPrice`); its discounted total must be between 0 and that own price (an
+ * order-level voucher can be spread over the fee line, case A12: verify-payment-fee.ts).
+ *
  * Source: apps/checkout-prices/src/modules/payment-fee/payment-fee.ts (`toCents`,
- * `computeFeeCents`) and src/pages/api/payment-fee.ts (the base). Any change there must be made
- * here in the same change: payment-fee-rule.test.ts holds golden vectors produced by
- * checkout-prices' own functions.
+ * `computeFeeCents`) and src/pages/api/payment-fee.ts (the base and the own-price check). Any
+ * change there must be made here in the same change: payment-fee-rule.test.ts holds golden
+ * vectors produced by checkout-prices' own functions.
  */
 
 export function toCents(amount: number): number {

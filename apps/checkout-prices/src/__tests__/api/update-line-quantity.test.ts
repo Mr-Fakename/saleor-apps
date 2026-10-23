@@ -141,3 +141,82 @@ describe("POST /api/update-line-quantity — configured cable lines (L4)", () =>
     expect(checkout.lines[0].unitPrice).toBe(80);
   });
 });
+
+describe("POST /api/update-line-quantity — the payment-fee line", () => {
+  // The Stripe app compares the fee line's OWN price, which is reliable only if no writer
+  // changes a fee line's price in place (Saleor keeps a stored copy of it that an in-place
+  // change can leave stale). Only /api/payment-fee writes the fee line, by replacing it.
+  const FEE_VARIANT = toGlobalId("ProductVariant", 449);
+  const FEE_KEY = "payment_fee_type";
+
+  beforeEach(() => {
+    fakeSaleor.reset();
+    seed();
+    // Quantity tiers on the fee variant: before the fix they priced the fee line in place.
+    fakeSaleor.addVariant({
+      id: FEE_VARIANT,
+      name: "PayPal fee",
+      productName: "Service fee",
+      productSlug: "service-fee",
+      price: 0,
+      currency: "EUR",
+      attributes: [],
+      quantityPricing: JSON.stringify({ "1": "0.5" }),
+    });
+    vi.stubEnv("CABLE_PRODUCT_SLUG", "");
+    vi.stubEnv("PAYMENT_FEE_VARIANT_ID", FEE_VARIANT);
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("refuses to change a fee line's quantity or price, and writes nothing", async () => {
+    const checkout = fakeSaleor.addCheckout({});
+    const fee = fakeSaleor.newLine(FEE_VARIANT, 1, 3.15, [{ key: FEE_KEY, value: "paypal_1.5_percent" }]);
+
+    checkout.lines.push(fakeSaleor.newLine(PLAIN, 2, 100), fee);
+
+    const res = await updateQuantity(checkout.id, fee.id, 1);
+
+    expect(res._status).toBe(400);
+    expect(fakeSaleor.mutationNames()).toStrictEqual([]);
+    expect(checkout.lines.find((l) => l.id === fee.id)?.unitPrice).toBe(3.15);
+  });
+
+  it("still removes a fee line with quantity 0", async () => {
+    const checkout = fakeSaleor.addCheckout({});
+    const fee = fakeSaleor.newLine(FEE_VARIANT, 1, 3.15, [{ key: FEE_KEY, value: "paypal_1.5_percent" }]);
+
+    checkout.lines.push(fee);
+
+    const res = await updateQuantity(checkout.id, fee.id, 0);
+
+    expect(res._status).toBe(200);
+    expect(checkout.lines).toStrictEqual([]);
+  });
+
+  it("re-prices a product line normally even when a shopper put the fee marker on it", async () => {
+    // Exclusion is by the fee VARIANT: the public marker is shopper-writable.
+    const checkout = fakeSaleor.addCheckout({});
+    const line = fakeSaleor.newLine(PLAIN, 1, 100, [{ key: FEE_KEY, value: "x" }]);
+
+    checkout.lines.push(line);
+    const plain = fakeSaleor.variants.get(PLAIN);
+
+    if (plain) {
+      plain.quantityPricing = JSON.stringify({ "1": "100", "10": "80" });
+    }
+
+    const res = await updateQuantity(checkout.id, line.id, 10);
+
+    expect(res._status).toBe(200);
+    expect(checkout.lines[0].unitPrice).toBe(80);
+  });
+});

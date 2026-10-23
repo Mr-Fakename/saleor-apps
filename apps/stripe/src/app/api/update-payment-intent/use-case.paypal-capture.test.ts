@@ -56,13 +56,14 @@ const checkout: CheckoutPaymentStateWithLines = {
     },
   ],
   lines: [
-    { id: "Q2hlY2tvdXRMaW5lOjE=", quantity: 1, variant: { id: "UHJvZHVjdFZhcmlhbnQ6MTI=" }, metadata: [], totalPrice: { gross: eur(210) } },
+    { id: "Q2hlY2tvdXRMaW5lOjE=", quantity: 1, variant: { id: "UHJvZHVjdFZhcmlhbnQ6MTI=" }, metadata: [], totalPrice: { gross: eur(210) }, undiscountedTotalPrice: eur(210) },
     {
       id: "Q2hlY2tvdXRMaW5lOjI=",
       quantity: 1,
       variant: { id: FEE_VARIANT_ID },
       metadata: [{ key: "payment_fee_type", value: "paypal_1.5_percent" }],
       totalPrice: { gross: eur(3.15) },
+      undiscountedTotalPrice: eur(3.15),
     },
   ],
 };
