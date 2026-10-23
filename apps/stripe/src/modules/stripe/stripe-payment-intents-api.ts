@@ -7,6 +7,23 @@ import { StripePaymentIntentId } from "./stripe-payment-intent-id";
 import { StripeRestrictedKey } from "./stripe-restricted-key";
 import { CreatePaymentIntentArgs, IStripePaymentIntentsApi, UpdatePaymentIntentArgs } from "./types";
 
+/*
+ * Bounds the Stripe calls made while Saleor waits for the answer to TRANSACTION_CHARGE_REQUESTED
+ * or TRANSACTION_CANCELATION_REQUESTED. Saleor 3.22.74 waits 2 s to connect and 18 s for the
+ * answer (settings.WEBHOOK_SYNC_TIMEOUT) and, when the app is slower, records its own failure
+ * without a retry. stripe-node defaults to 80 s per attempt.
+ *
+ * One handler call makes one live read and at most one write, each in one attempt (the refund
+ * pattern, StripeRefundsApi): an unknown outcome goes straight back to the use case, which
+ * answers HTTP 503, and Saleor re-sends the request (handle_transaction_request_task), which
+ * reads the PaymentIntent again and reuses the write's idempotency key. stripe-node still retries
+ * once, 0.5 s later, when the connection was closed on the first attempt
+ * (RequestSender._shouldRetry): worst case (2 x 2.5 s + 0.5 s) + (2 x 5 s + 0.5 s) = 16 s.
+ */
+const TRANSACTION_ACTION_READ_TIMEOUT_MS = 2_500;
+const TRANSACTION_ACTION_WRITE_TIMEOUT_MS = 5_000;
+const TRANSACTION_ACTION_MAX_NETWORK_RETRIES = 0;
+
 export class StripePaymentIntentsApi implements IStripePaymentIntentsApi {
   private stripeApiWrapper: Pick<Stripe, "paymentIntents">;
 
@@ -74,11 +91,37 @@ export class StripePaymentIntentsApi implements IStripePaymentIntentsApi {
     );
   }
 
-  async capturePaymentIntent(args: {
+  async getPaymentIntentForTransactionAction(args: {
     id: StripePaymentIntentId;
   }): Promise<Result<Stripe.PaymentIntent, unknown>> {
     return ResultAsync.fromPromise(
-      this.stripeApiWrapper.paymentIntents.capture(args.id),
+      this.stripeApiWrapper.paymentIntents.retrieve(
+        args.id,
+        {},
+        {
+          timeout: TRANSACTION_ACTION_READ_TIMEOUT_MS,
+          maxNetworkRetries: TRANSACTION_ACTION_MAX_NETWORK_RETRIES,
+        },
+      ),
+      (error) => error,
+    );
+  }
+
+  async capturePaymentIntent(args: {
+    id: StripePaymentIntentId;
+    amountToCapture: number;
+    idempotencyKey: string;
+  }): Promise<Result<Stripe.PaymentIntent, unknown>> {
+    return ResultAsync.fromPromise(
+      this.stripeApiWrapper.paymentIntents.capture(
+        args.id,
+        { amount_to_capture: args.amountToCapture },
+        {
+          idempotencyKey: args.idempotencyKey,
+          timeout: TRANSACTION_ACTION_WRITE_TIMEOUT_MS,
+          maxNetworkRetries: TRANSACTION_ACTION_MAX_NETWORK_RETRIES,
+        },
+      ),
       (error) => error,
     );
   }
@@ -88,6 +131,24 @@ export class StripePaymentIntentsApi implements IStripePaymentIntentsApi {
   }): Promise<Result<Stripe.PaymentIntent, unknown>> {
     return ResultAsync.fromPromise(
       this.stripeApiWrapper.paymentIntents.cancel(args.id),
+      (error) => error,
+    );
+  }
+
+  async cancelPaymentIntentForTransactionAction(args: {
+    id: StripePaymentIntentId;
+    idempotencyKey: string;
+  }): Promise<Result<Stripe.PaymentIntent, unknown>> {
+    return ResultAsync.fromPromise(
+      this.stripeApiWrapper.paymentIntents.cancel(
+        args.id,
+        {},
+        {
+          idempotencyKey: args.idempotencyKey,
+          timeout: TRANSACTION_ACTION_WRITE_TIMEOUT_MS,
+          maxNetworkRetries: TRANSACTION_ACTION_MAX_NETWORK_RETRIES,
+        },
+      ),
       (error) => error,
     );
   }

@@ -1,5 +1,6 @@
 import { ObservabilityAttributes } from "@saleor/apps-otel/src/observability-attributes";
 import { err, ok, Result } from "neverthrow";
+import Stripe from "stripe";
 
 import {
   AppIsNotConfiguredResponse,
@@ -19,7 +20,12 @@ import {
   getTransactionFromRequestedEventPayload,
 } from "@/modules/saleor/transaction-requested-event-helpers";
 import { mapStripeErrorToApiError } from "@/modules/stripe/stripe-api-error";
-import { createStripePaymentIntentId } from "@/modules/stripe/stripe-payment-intent-id";
+import { createStripeCancelIdempotencyKey } from "@/modules/stripe/stripe-payment-intent-action-idempotency-key";
+import {
+  createStripePaymentIntentId,
+  StripePaymentIntentId,
+} from "@/modules/stripe/stripe-payment-intent-id";
+import { isStripeOutcomeUnknown } from "@/modules/stripe/stripe-request-outcome";
 import { createTimestampFromPaymentIntent } from "@/modules/stripe/stripe-timestamps";
 import { IStripePaymentIntentsApiFactory } from "@/modules/stripe/types";
 import {
@@ -27,16 +33,38 @@ import {
   CancelSuccessResult,
 } from "@/modules/transaction-result/cancel-result";
 
+import { CancelAlreadyCapturedError } from "./cancel-refusal-errors";
 import {
+  CancelOutcomeUnknownResponse,
   TransactionCancelationRequestedUseCaseResponses,
   TransactionCancelationRequestedUseCaseResponsesType,
 } from "./use-case-response";
 
 type UseCaseExecuteResult = Result<
   TransactionCancelationRequestedUseCaseResponsesType,
-  AppIsNotConfiguredResponse | BrokenAppResponse | MalformedRequestResponse
+  | AppIsNotConfiguredResponse
+  | BrokenAppResponse
+  | MalformedRequestResponse
+  | CancelOutcomeUnknownResponse
 >;
 
+/**
+ * TRANSACTION_CANCELATION_REQUESTED: releases an authorization (cancels the PaymentIntent).
+ *
+ * The live PaymentIntent decides (fixed 2026-10-22). Before, a second cancel (staff retry, the
+ * checkout release-funds task, a race) answered Stripe's refusal as CANCEL_FAILURE under the
+ * PaymentIntent id, and Saleor 3.22.74 then dropped the earlier CANCEL_SUCCESS
+ * (payment/transaction_item_calculations.py _recalculate_cancel_amounts): the released
+ * authorization came back in authorizedAmount.
+ *
+ * - canceled: CANCEL_SUCCESS (a replay, no Stripe write).
+ * - succeeded: CANCEL_FAILURE "already captured: refund instead".
+ * - processing: HTTP 503, no Stripe write (Saleor re-sends the request).
+ * - otherwise: cancel with idempotency key cancel:v1:<pi>:<status>, one attempt; Stripe decides
+ *   (see createStripeCancelIdempotencyKey for why the status is in the key).
+ * - A Stripe outcome the app did not get: HTTP 503, Saleor re-sends the request.
+ * - Every CANCEL_FAILURE has a pspReference of its own (createCancelFailurePspReference).
+ */
 export class TransactionCancelationRequestedUseCase {
   private logger = createLogger("TransactionCancelationRequestedUseCase");
   private appConfigRepo: AppConfigRepo;
@@ -48,6 +76,72 @@ export class TransactionCancelationRequestedUseCase {
   }) {
     this.appConfigRepo = deps.appConfigRepo;
     this.stripePaymentIntentsApiFactory = deps.stripePaymentIntentsApiFactory;
+  }
+
+  /** A Stripe error: 503 when Stripe may have done it, else CANCEL_FAILURE. */
+  private stripeErrorResult(args: {
+    stripePaymentIntentId: StripePaymentIntentId;
+    error: unknown;
+    during: "read" | "cancel";
+  }): UseCaseExecuteResult {
+    const stripeError = mapStripeErrorToApiError(args.error);
+
+    if (isStripeOutcomeUnknown(args.error)) {
+      this.logger.warn("Stripe outcome unknown: asking Saleor to retry the same request", {
+        during: args.during,
+        error: stripeError.message,
+        stripePaymentIntentId: args.stripePaymentIntentId,
+      });
+
+      return err(
+        new CancelOutcomeUnknownResponse(appContextContainer.getContextValue(), stripeError),
+      );
+    }
+
+    this.logger.error("Stripe refused the request: answering CANCEL_FAILURE", {
+      during: args.during,
+      error: stripeError.message,
+      stripePaymentIntentId: args.stripePaymentIntentId,
+    });
+
+    // Nothing changed at Stripe: Saleor keeps the actions it has.
+    return ok(
+      new TransactionCancelationRequestedUseCaseResponses.Failure({
+        stripePaymentIntentId: args.stripePaymentIntentId,
+        transactionResult: new CancelFailureResult(),
+        error: stripeError,
+        actions: null,
+        appContext: appContextContainer.getContextValue(),
+      }),
+    );
+  }
+
+  private success(args: {
+    stripePaymentIntentId: StripePaymentIntentId;
+    paymentIntent: Stripe.PaymentIntent;
+  }): UseCaseExecuteResult {
+    // canceled: the PaymentIntent amount, as the Stripe webhook reports payment_intent.canceled.
+    const saleorMoneyResult = resolveSaleorMoneyFromStripePaymentIntent(args.paymentIntent);
+
+    if (saleorMoneyResult.isErr()) {
+      this.logger.error("Failed to create Saleor money", {
+        error: saleorMoneyResult.error,
+      });
+
+      return err(
+        new BrokenAppResponse(appContextContainer.getContextValue(), saleorMoneyResult.error),
+      );
+    }
+
+    return ok(
+      new TransactionCancelationRequestedUseCaseResponses.Success({
+        saleorMoney: saleorMoneyResult.value,
+        stripePaymentIntentId: args.stripePaymentIntentId,
+        transactionResult: new CancelSuccessResult(),
+        timestamp: createTimestampFromPaymentIntent(args.paymentIntent),
+        appContext: appContextContainer.getContextValue(),
+      }),
+    );
   }
 
   async execute(args: {
@@ -104,55 +198,107 @@ export class TransactionCancelationRequestedUseCase {
       key: restrictedKey,
     });
 
-    this.logger.debug("Canceling Stripe payment intent with id", {
-      id: transaction.pspReference,
-    });
-
     const stripePaymentIntentId = createStripePaymentIntentId(transaction.pspReference);
 
-    const cancelPaymentIntentResult = await stripePaymentIntentsApi.cancelPaymentIntent({
+    const liveResult = await stripePaymentIntentsApi.getPaymentIntentForTransactionAction({
       id: stripePaymentIntentId,
     });
 
-    if (cancelPaymentIntentResult.isErr()) {
-      const error = mapStripeErrorToApiError(cancelPaymentIntentResult.error);
+    if (liveResult.isErr()) {
+      return this.stripeErrorResult({
+        stripePaymentIntentId,
+        error: liveResult.error,
+        during: "read",
+      });
+    }
 
-      this.logger.error("Failed to capture payment intent", {
-        error,
+    const live = liveResult.value;
+
+    if (live.status === "canceled") {
+      this.logger.info("PaymentIntent already canceled: replaying CANCEL_SUCCESS", {
+        stripePaymentIntentId,
+      });
+
+      return this.success({ stripePaymentIntentId, paymentIntent: live });
+    }
+
+    if (live.status === "succeeded") {
+      this.logger.warn("PaymentIntent already captured: answering CANCEL_FAILURE", {
+        stripePaymentIntentId,
       });
 
       return ok(
         new TransactionCancelationRequestedUseCaseResponses.Failure({
           stripePaymentIntentId,
           transactionResult: new CancelFailureResult(),
-          error,
+          error: new CancelAlreadyCapturedError(
+            `PaymentIntent ${stripePaymentIntentId} is succeeded`,
+          ),
+          // Captured money goes back through a refund only.
+          actions: ["REFUND"],
           appContext: appContextContainer.getContextValue(),
         }),
       );
     }
 
-    const saleorMoneyResult = resolveSaleorMoneyFromStripePaymentIntent(
-      cancelPaymentIntentResult.value,
-    );
-
-    if (saleorMoneyResult.isErr()) {
-      this.logger.error("Failed to create Saleor money", {
-        error: saleorMoneyResult.error,
+    if (live.status === "processing") {
+      /*
+       * Review P2: Stripe refuses to cancel a processing PaymentIntent in most cases and would
+       * store that refusal under the idempotency key. No write: the retry reads it again.
+       */
+      this.logger.warn("PaymentIntent processing: asking Saleor to retry", {
+        stripePaymentIntentId,
       });
 
       return err(
-        new BrokenAppResponse(appContextContainer.getContextValue(), saleorMoneyResult.error),
+        new CancelOutcomeUnknownResponse(
+          appContextContainer.getContextValue(),
+          new BaseError(`PaymentIntent ${stripePaymentIntentId} is processing`),
+        ),
       );
     }
 
-    return ok(
-      new TransactionCancelationRequestedUseCaseResponses.Success({
-        saleorMoney: saleorMoneyResult.value,
+    this.logger.info("Canceling Stripe PaymentIntent", {
+      stripePaymentIntentId,
+      status: live.status,
+    });
+
+    const cancelResult = await stripePaymentIntentsApi.cancelPaymentIntentForTransactionAction({
+      id: stripePaymentIntentId,
+      idempotencyKey: createStripeCancelIdempotencyKey({
         stripePaymentIntentId,
-        transactionResult: new CancelSuccessResult(),
-        timestamp: createTimestampFromPaymentIntent(cancelPaymentIntentResult.value),
-        appContext: appContextContainer.getContextValue(),
+        paymentIntentStatus: live.status,
       }),
-    );
+    });
+
+    if (cancelResult.isErr()) {
+      return this.stripeErrorResult({
+        stripePaymentIntentId,
+        error: cancelResult.error,
+        during: "cancel",
+      });
+    }
+
+    if (cancelResult.value.status !== "canceled") {
+      // Not final: the retry reads the PaymentIntent again.
+      this.logger.warn(
+        "Cancel answered a PaymentIntent that is not canceled: asking Saleor to retry",
+        {
+          stripePaymentIntentId,
+          status: cancelResult.value.status,
+        },
+      );
+
+      return err(
+        new CancelOutcomeUnknownResponse(
+          appContextContainer.getContextValue(),
+          new BaseError(
+            `PaymentIntent ${stripePaymentIntentId} is ${cancelResult.value.status} after the cancel`,
+          ),
+        ),
+      );
+    }
+
+    return this.success({ stripePaymentIntentId, paymentIntent: cancelResult.value });
   }
 }
