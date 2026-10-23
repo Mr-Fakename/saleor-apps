@@ -32,6 +32,7 @@ export class InMemoryCaptureCoordinationRepo implements ICaptureCoordinationRepo
       chargeAttempts: claim.chargeAttempts,
       cancelAttempts: claim.cancelAttempts,
       lastRequestAtMs: claim.lastRequestAtMs,
+      firstCheckedAtMs: claim.firstCheckedAtMs,
       holdReason: claim.holdReason,
     };
   }
@@ -40,8 +41,13 @@ export class InMemoryCaptureCoordinationRepo implements ICaptureCoordinationRepo
     return this.claims.get(this.key(access, paymentIntentId));
   }
 
-  /** Another process holds the claim lock until `untilMs`. */
-  lockByOther(access: CaptureCoordinationAccess, paymentIntentId: string, untilMs: number) {
+  /** Another check (by default another process) holds the claim lock until `untilMs`. */
+  lockByOther(
+    access: CaptureCoordinationAccess,
+    paymentIntentId: string,
+    untilMs: number,
+    lockHolder = "other-process",
+  ) {
     const existing = this.claimOf(access, paymentIntentId);
 
     this.claims.set(this.key(access, paymentIntentId), {
@@ -50,8 +56,9 @@ export class InMemoryCaptureCoordinationRepo implements ICaptureCoordinationRepo
       chargeAttempts: existing?.chargeAttempts ?? 0,
       cancelAttempts: existing?.cancelAttempts ?? 0,
       lastRequestAtMs: existing?.lastRequestAtMs ?? null,
+      firstCheckedAtMs: existing?.firstCheckedAtMs ?? null,
       holdReason: existing?.holdReason ?? null,
-      lockHolder: "other-process",
+      lockHolder,
       lockExpiresAtMs: untilMs,
     });
   }
@@ -98,11 +105,8 @@ export class InMemoryCaptureCoordinationRepo implements ICaptureCoordinationRepo
     const key = this.key(args.access, args.paymentIntentId);
     const existing = this.claims.get(key);
 
-    if (
-      existing?.lockHolder &&
-      existing.lockHolder !== args.holderId &&
-      (existing.lockExpiresAtMs ?? 0) >= args.nowMs
-    ) {
+    // As DynamoDB: a valid lock refuses every other check, the same holder included (review P2).
+    if (existing?.lockHolder && (existing.lockExpiresAtMs ?? 0) >= args.nowMs) {
       return ok(null);
     }
 
@@ -112,6 +116,7 @@ export class InMemoryCaptureCoordinationRepo implements ICaptureCoordinationRepo
       chargeAttempts: existing?.chargeAttempts ?? 0,
       cancelAttempts: existing?.cancelAttempts ?? 0,
       lastRequestAtMs: existing?.lastRequestAtMs ?? null,
+      firstCheckedAtMs: existing?.firstCheckedAtMs ?? args.nowMs,
       holdReason: existing?.holdReason ?? null,
       lockHolder: args.holderId,
       lockExpiresAtMs: args.nowMs + args.lockMs,

@@ -15,6 +15,7 @@ import {
 import { mockedSaleorApiUrl } from "@/__tests__/mocks/saleor-api-url";
 import { createStripePaymentIntentId } from "@/modules/stripe/stripe-payment-intent-id";
 
+import { AUTHORIZATION_RECORD_GRACE_MS } from "./decide-capture";
 import { CAPTURE_REQUEST_SETTLE_MS, PaypalCaptureCoordinator } from "./paypal-capture-coordinator";
 
 /*
@@ -370,6 +371,164 @@ describe("PaypalCaptureCoordinator (A3d)", () => {
       expect(await check()).toStrictEqual({ action: "error", during });
       expect(saleor.requests).toStrictEqual([]);
       expect(saleor.tags).toStrictEqual([]);
+    });
+  });
+
+  /*
+   * Payments review of d462375c, P2: the claim lock let the same holder back in
+   * (`lockHolder = :me`), and the runtime has one holder id per process. On dess (one process) a
+   * sweep overlapping a soon check sent two CHARGE requests and counted two attempts, so a
+   * spurious capture-stuck hold came early. Every check now locks with a token of its own, and
+   * a coordinator never runs two checks of one PaymentIntent at once.
+   */
+  describe("re-entrancy (review P2)", () => {
+    it("one process: an overlapping sweep and soon check give one request and one attempt", async () => {
+      const outcomes = await Promise.all([check("sweep"), check("soon")]);
+
+      expect(outcomes).toContainEqual({ action: "busy" });
+      expect(outcomes).toContainEqual({ action: "charge-requested", attempt: 1, delivered: true });
+      expect(saleor.requests).toHaveLength(1);
+      expect(claim()?.chargeAttempts).toBe(1);
+    });
+
+    it("two coordinators with the same holder id (one process id) never act together", async () => {
+      const twin = new PaypalCaptureCoordinator({
+        repo,
+        transactionRecorder: recorder,
+        gate: A3D_GATE,
+        holderId: "worker-1",
+        now: () => clock,
+        logger,
+      });
+
+      const outcomes = await Promise.all([
+        check("sweep"),
+        twin.checkPaymentIntent({
+          access: ACCESS,
+          stripe,
+          saleor,
+          paymentIntentId: createStripePaymentIntentId(PI),
+          trigger: "soon",
+        }),
+      ]);
+
+      expect(outcomes).toContainEqual({ action: "busy" });
+      expect(saleor.requests).toHaveLength(1);
+      expect(claim()?.chargeAttempts).toBe(1);
+    });
+
+    it("a check never takes over the lock of a running check, even from the same process", async () => {
+      await check();
+
+      const firstToken = claim()?.lockHolder;
+
+      expect(firstToken).toBeNull();
+
+      repo.lockByOther(ACCESS, PI, clock + 30_000, "worker-1");
+
+      expect(await check()).toStrictEqual({ action: "busy" });
+    });
+
+    it("after the overlap, the 3-attempt budget is intact: capture-stuck only after 3 real requests", async () => {
+      for (let round = 1; round <= 3; round += 1) {
+        await Promise.all([check("sweep"), check("soon")]);
+        advance(CAPTURE_REQUEST_SETTLE_MS);
+      }
+
+      expect(saleor.requests).toHaveLength(3);
+      expect(await check()).toStrictEqual({ action: "held", reason: "capture-stuck" });
+    });
+  });
+
+  /*
+   * Payments review of d462375c, P2: R9 waited forever when Saleor never recorded the
+   * AUTHORIZATION_SUCCESS (a lost Stripe webhook): no alert until the authorization expired.
+   * A wait longer than 30 min, counted from the worker's first check of the authorization, is
+   * now held for staff with the reason "authorization-not-recorded".
+   */
+  describe("authorization never recorded in Saleor (review P2)", () => {
+    beforeEach(() => {
+      saleor.transaction = a3dTransaction(PI, { authorizedAmount: { amount: 0, currency: "EUR" } });
+      saleor.transaction = {
+        ...saleor.transaction,
+        order: saleor.transaction.order && {
+          ...saleor.transaction.order,
+          transactions: saleor.transaction.order.transactions.map((t) => ({
+            ...t,
+            authorizedAmount: { amount: 0, currency: "EUR" },
+          })),
+        },
+      };
+    });
+
+    it("waits up to 30 min from the first check", async () => {
+      expect(AUTHORIZATION_RECORD_GRACE_MS).toBe(30 * 60_000);
+      expect(await check()).toStrictEqual({ action: "waiting", reason: "authorization-not-recorded" });
+
+      advance(AUTHORIZATION_RECORD_GRACE_MS - 1);
+
+      expect(await check()).toStrictEqual({ action: "waiting", reason: "authorization-not-recorded" });
+      expect(saleor.tags).toStrictEqual([]);
+    });
+
+    it("then holds it: tag, error log, no Stripe write, no request", async () => {
+      await check();
+      advance(AUTHORIZATION_RECORD_GRACE_MS);
+
+      expect(await check()).toStrictEqual({ action: "held", reason: "authorization-not-recorded" });
+      expect(saleor.tags).toStrictEqual([
+        { transactionId: A3D_TX_ID, reason: "authorization-not-recorded", checkedAt: new Date(clock).toISOString() },
+      ]);
+      expect(saleor.requests).toStrictEqual([]);
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining("HELD"),
+        expect.objectContaining({ reason: "authorization-not-recorded", rule: "R9" }),
+      );
+
+      advance(60_000);
+
+      expect(await check()).toStrictEqual({ action: "skipped", reason: "already-held" });
+    });
+
+    it("counts from the first check, not from a later one", async () => {
+      await check();
+      advance(20 * 60_000);
+      await check();
+      advance(10 * 60_000);
+
+      expect(await check()).toStrictEqual({ action: "held", reason: "authorization-not-recorded" });
+    });
+  });
+
+  /*
+   * Item 5 of the review: every Saleor call of the capture worker has a 15 s timeout. A request
+   * that timed out may still have reached Saleor, so its outcome is unknown: it is counted, and
+   * only the re-read after the settle window decides what comes next, never a blind re-request.
+   */
+  describe("a Saleor request that times out (outcome unknown)", () => {
+    it("is counted, reported as unknown, and never repeated inside the settle window", async () => {
+      saleor.requestTimesOut = true;
+
+      expect(await check()).toStrictEqual({ action: "charge-requested", attempt: 1, delivered: "unknown" });
+      expect(logger.warn).toHaveBeenCalled();
+      expect(followUps).toStrictEqual([CAPTURE_REQUEST_SETTLE_MS + 5_000]);
+
+      saleor.requestTimesOut = false;
+      advance(30_000);
+
+      expect(await check("soon")).toStrictEqual({ action: "waiting", reason: "request-settling" });
+      expect(saleor.requests).toHaveLength(1);
+    });
+
+    it("the re-read after the window sees the capture that did happen: no second request", async () => {
+      saleor.requestTimesOut = true;
+      saleor.onCharge = () => stripe.update(PI, { status: "succeeded", amount_received: 101_50, amount_capturable: 0 });
+
+      await check();
+      advance(CAPTURE_REQUEST_SETTLE_MS);
+
+      expect(await check("follow-up")).toStrictEqual({ action: "captured" });
+      expect(saleor.requests).toHaveLength(1);
     });
   });
 });

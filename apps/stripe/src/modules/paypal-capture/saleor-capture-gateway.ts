@@ -10,6 +10,7 @@ import { BaseError } from "@/lib/errors";
 
 import { buildCaptureHoldMetadata } from "./capture-state-tags";
 import { CaptureHoldReason, CaptureTransaction } from "./decide-capture";
+import { createTimeoutFetch, isRequestTimeout, SALEOR_REQUEST_TIMEOUT_MS } from "./saleor-request-timeout";
 
 export const SaleorCaptureGatewayError = BaseError.subclass("SaleorCaptureGatewayError", {
   props: {
@@ -17,7 +18,41 @@ export const SaleorCaptureGatewayError = BaseError.subclass("SaleorCaptureGatewa
   },
 });
 
-type GatewayResult<T> = Promise<Result<T, InstanceType<typeof SaleorCaptureGatewayError>>>;
+/**
+ * The call did not answer within SALEOR_REQUEST_TIMEOUT_MS. For a request it means the outcome
+ * is UNKNOWN: Saleor may have recorded it and sent the webhook. The coordinator counts it and
+ * decides only after re-reading the PaymentIntent (never a blind re-request).
+ */
+export const SaleorCaptureGatewayTimeoutError = SaleorCaptureGatewayError.subclass(
+  "SaleorCaptureGatewayTimeoutError",
+  {
+    props: {
+      _internalName: "SaleorCaptureGatewayTimeoutError" as const,
+    },
+  },
+);
+
+/** The urql error of a failed call: a timeout, or any other failure. */
+const failure = (
+  message: string,
+  cause?: { networkError?: unknown } | unknown,
+): SaleorCaptureGatewayFailure => {
+  const networkError =
+    typeof cause === "object" && cause !== null && "networkError" in cause
+      ? (cause as { networkError?: unknown }).networkError
+      : cause;
+
+  return isRequestTimeout(networkError)
+    ? new SaleorCaptureGatewayTimeoutError(`${message}: timed out after ${SALEOR_REQUEST_TIMEOUT_MS} ms`, { cause })
+    : new SaleorCaptureGatewayError(message, { cause });
+};
+
+/** A failed call: a timeout (outcome unknown) or any other failure. */
+export type SaleorCaptureGatewayFailure = InstanceType<
+  typeof SaleorCaptureGatewayError | typeof SaleorCaptureGatewayTimeoutError
+>;
+
+type GatewayResult<T> = Promise<Result<T, SaleorCaptureGatewayFailure>>;
 
 /** What the capture worker reads and writes in Saleor (app token, HANDLE_PAYMENTS). */
 export interface ISaleorCaptureGateway {
@@ -47,9 +82,16 @@ const describeErrors = (errors: MutationErrors) =>
  */
 export class SaleorCaptureGateway implements ISaleorCaptureGateway {
   private client: Pick<Client, "query" | "mutation">;
+  /** Every call ends within SALEOR_REQUEST_TIMEOUT_MS (review of d462375c, item 5). */
+  private timeoutFetch: typeof fetch;
 
-  constructor(client: Pick<Client, "query" | "mutation">) {
+  constructor(
+    client: Pick<Client, "query" | "mutation">,
+    /** For tests: another timeout, another underlying fetch. */
+    opts?: { timeoutMs?: number; fetch?: typeof fetch },
+  ) {
     this.client = client;
+    this.timeoutFetch = createTimeoutFetch(opts?.timeoutMs ?? SALEOR_REQUEST_TIMEOUT_MS, opts?.fetch);
   }
 
   async fetchTransaction(args: { transactionId: string }): GatewayResult<CaptureTransaction | null> {
@@ -59,12 +101,12 @@ export class SaleorCaptureGateway implements ISaleorCaptureGateway {
           FetchCaptureTransactionDocument,
           { transactionId: args.transactionId },
           // The capture decision reads amounts and the order: never from the urql cache.
-          { requestPolicy: "network-only" },
+          { requestPolicy: "network-only", fetch: this.timeoutFetch },
         )
         .toPromise();
 
       if (response.error) {
-        return err(new SaleorCaptureGatewayError("Failed to fetch the transaction", { cause: response.error }));
+        return err(failure("Failed to fetch the transaction", response.error));
       }
 
       if (!response.data) {
@@ -73,7 +115,7 @@ export class SaleorCaptureGateway implements ISaleorCaptureGateway {
 
       return ok(response.data.transaction ?? null);
     } catch (error) {
-      return err(new SaleorCaptureGatewayError("Failed to fetch the transaction", { cause: error }));
+      return err(failure("Failed to fetch the transaction", error));
     }
   }
 
@@ -83,14 +125,12 @@ export class SaleorCaptureGateway implements ISaleorCaptureGateway {
     amount?: number;
   }): GatewayResult<void> {
     try {
-      const response = await this.client.mutation(RequestTransactionActionDocument, variables);
+      const response = await this.client.mutation(RequestTransactionActionDocument, variables, {
+        fetch: this.timeoutFetch,
+      });
 
       if (response.error) {
-        return err(
-          new SaleorCaptureGatewayError(`transactionRequestAction(${variables.actionType}) failed`, {
-            cause: response.error,
-          }),
-        );
+        return err(failure(`transactionRequestAction(${variables.actionType}) failed`, response.error));
       }
 
       const payload = response.data?.transactionRequestAction;
@@ -113,11 +153,7 @@ export class SaleorCaptureGateway implements ISaleorCaptureGateway {
 
       return ok(undefined);
     } catch (error) {
-      return err(
-        new SaleorCaptureGatewayError(`transactionRequestAction(${variables.actionType}) failed`, {
-          cause: error,
-        }),
-      );
+      return err(failure(`transactionRequestAction(${variables.actionType}) failed`, error));
     }
   }
 
@@ -131,24 +167,24 @@ export class SaleorCaptureGateway implements ISaleorCaptureGateway {
 
   async tagHold(args: { transactionId: string; reason: CaptureHoldReason; checkedAt: Date }): GatewayResult<void> {
     try {
-      const response = await this.client.mutation(TransactionUpdateCaptureStateDocument, {
-        transactionId: args.transactionId,
-        metadata: buildCaptureHoldMetadata({ reason: args.reason, checkedAt: args.checkedAt }),
-      });
+      const response = await this.client.mutation(
+        TransactionUpdateCaptureStateDocument,
+        {
+          transactionId: args.transactionId,
+          metadata: buildCaptureHoldMetadata({ reason: args.reason, checkedAt: args.checkedAt }),
+        },
+        { fetch: this.timeoutFetch },
+      );
 
       const errors = response.data?.transactionUpdate?.errors ?? [];
 
       if (response.error || !response.data?.transactionUpdate || errors.length > 0) {
-        return err(
-          new SaleorCaptureGatewayError(`Failed to tag the held transaction: ${describeErrors(errors)}`, {
-            cause: response.error,
-          }),
-        );
+        return err(failure(`Failed to tag the held transaction: ${describeErrors(errors)}`, response.error));
       }
 
       return ok(undefined);
     } catch (error) {
-      return err(new SaleorCaptureGatewayError("Failed to tag the held transaction", { cause: error }));
+      return err(failure("Failed to tag the held transaction", error));
     }
   }
 }

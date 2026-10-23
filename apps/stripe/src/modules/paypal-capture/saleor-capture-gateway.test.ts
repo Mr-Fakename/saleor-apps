@@ -1,3 +1,4 @@
+import { CombinedError } from "urql";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { a3dTransaction } from "@/__tests__/mocks/paypal-capture-fixtures";
@@ -7,7 +8,11 @@ import {
   TransactionUpdateCaptureStateDocument,
 } from "@/generated/graphql";
 
-import { SaleorCaptureGateway, SaleorCaptureGatewayError } from "./saleor-capture-gateway";
+import {
+  SaleorCaptureGateway,
+  SaleorCaptureGatewayError,
+  SaleorCaptureGatewayTimeoutError,
+} from "./saleor-capture-gateway";
 
 /*
  * A3d talks to Saleor with the app token (HANDLE_PAYMENTS only, no manifest change):
@@ -41,7 +46,11 @@ describe("SaleorCaptureGateway", () => {
 
       expect(result._unsafeUnwrap()).toStrictEqual(transaction);
       expect(query.mock.calls).toStrictEqual([
-        [FetchCaptureTransactionDocument, { transactionId: TX_ID }, { requestPolicy: "network-only" }],
+        [
+          FetchCaptureTransactionDocument,
+          { transactionId: TX_ID },
+          { requestPolicy: "network-only", fetch: expect.any(Function) },
+        ],
       ]);
     });
 
@@ -73,7 +82,11 @@ describe("SaleorCaptureGateway", () => {
 
       expect(result.isOk()).toBe(true);
       expect(mutation.mock.calls).toStrictEqual([
-        [RequestTransactionActionDocument, { transactionId: TX_ID, actionType: "CHARGE", amount: 101.5 }],
+        [
+          RequestTransactionActionDocument,
+          { transactionId: TX_ID, actionType: "CHARGE", amount: 101.5 },
+          { fetch: expect.any(Function) },
+        ],
       ]);
     });
 
@@ -83,7 +96,11 @@ describe("SaleorCaptureGateway", () => {
       await new SaleorCaptureGateway(client).requestCancel({ transactionId: TX_ID });
 
       expect(mutation.mock.calls).toStrictEqual([
-        [RequestTransactionActionDocument, { transactionId: TX_ID, actionType: "CANCEL" }],
+        [
+          RequestTransactionActionDocument,
+          { transactionId: TX_ID, actionType: "CANCEL" },
+          { fetch: expect.any(Function) },
+        ],
       ]);
     });
 
@@ -140,6 +157,7 @@ describe("SaleorCaptureGateway", () => {
               { key: "stripe_capture_checked_at", value: "2026-10-23T10:00:00.000Z" },
             ],
           },
+          { fetch: expect.any(Function) },
         ],
       ]);
     });
@@ -156,6 +174,54 @@ describe("SaleorCaptureGateway", () => {
       });
 
       expect(result._unsafeUnwrapErr()).toBeInstanceOf(SaleorCaptureGatewayError);
+    });
+  });
+
+  /*
+   * Item 5 of the review of d462375c: each Saleor call of the capture worker has a 15 s timeout
+   * (createTimeoutFetch, passed as the operation's fetch). A timed-out call is reported as
+   * SaleorCaptureGatewayTimeoutError: the request may have reached Saleor, its outcome is unknown.
+   */
+  describe("timeouts", () => {
+    const timeoutResponse = () => ({
+      error: new CombinedError({
+        networkError: Object.assign(new Error("The operation was aborted due to timeout"), {
+          name: "TimeoutError",
+        }),
+      }),
+    });
+
+    it("reports a timed-out capture request as an unknown outcome", async () => {
+      mutation.mockResolvedValue(timeoutResponse());
+
+      const result = await new SaleorCaptureGateway(client).requestCharge({ transactionId: TX_ID, amount: 101.5 });
+
+      expect(result._unsafeUnwrapErr()).toBeInstanceOf(SaleorCaptureGatewayTimeoutError);
+      expect(result._unsafeUnwrapErr()).toBeInstanceOf(SaleorCaptureGatewayError);
+    });
+
+    it("reports a timed-out release request as an unknown outcome", async () => {
+      mutation.mockResolvedValue(timeoutResponse());
+
+      const result = await new SaleorCaptureGateway(client).requestCancel({ transactionId: TX_ID });
+
+      expect(result._unsafeUnwrapErr()).toBeInstanceOf(SaleorCaptureGatewayTimeoutError);
+    });
+
+    it("reports a timed-out read as a timeout (the check then writes nothing)", async () => {
+      query.mockReturnValue({ toPromise: async () => timeoutResponse() });
+
+      const result = await new SaleorCaptureGateway(client).fetchTransaction({ transactionId: TX_ID });
+
+      expect(result._unsafeUnwrapErr()).toBeInstanceOf(SaleorCaptureGatewayTimeoutError);
+    });
+
+    it("keeps a refusal (no timeout) a plain failure", async () => {
+      mutation.mockResolvedValue({ error: new CombinedError({ networkError: new Error("ECONNREFUSED") }) });
+
+      const result = await new SaleorCaptureGateway(client).requestCharge({ transactionId: TX_ID, amount: 101.5 });
+
+      expect(result._unsafeUnwrapErr()).not.toBeInstanceOf(SaleorCaptureGatewayTimeoutError);
     });
   });
 });

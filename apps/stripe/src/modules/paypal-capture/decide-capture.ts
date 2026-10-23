@@ -82,6 +82,13 @@ export type CaptureTransaction = {
   readonly order?: CaptureOrder | null;
 };
 
+/**
+ * R9: how long the worker waits for Saleor to record the authorization (a lost or failing
+ * Stripe webhook) before it holds the PaymentIntent for staff instead of waiting until the
+ * authorization expires (review of d462375c, P2).
+ */
+export const AUTHORIZATION_RECORD_GRACE_MS = 30 * 60_000;
+
 export type CaptureRule =
   | "R0"
   | "R1"
@@ -116,6 +123,7 @@ export const CAPTURE_HOLD_REASONS = [
   "overcharge-by-fee",
   "fee-invalid",
   "amount-mismatch",
+  "authorization-not-recorded",
   "capture-stuck",
   "release-stuck",
 ] as const;
@@ -154,6 +162,11 @@ export type DecideCaptureInput = {
   record: CaptureRecord | null;
   transaction: CaptureTransaction | null;
   gate: Pick<PaymentFeeGateConfig, "ratePercent" | "variantId" | "metadataKey">;
+  /**
+   * R9: when the worker first checked this authorization (the claim's firstCheckedAt) and the
+   * time now. Without it, an unrecorded authorization only waits.
+   */
+  authorizationWait?: { firstCheckedAtMs: number; nowMs: number };
 };
 
 /** Order statuses in which the lines can no longer change and the order is being served. */
@@ -202,8 +215,9 @@ const holdsMoney = (transaction: CaptureOrderTransaction) =>
  * | R7   | order CANCELED -> RELEASE (OD1); UNCONFIRMED -> wait; must be            | hold order-status                          |
  * |      | UNFULFILLED / PARTIALLY_FULFILLED / FULFILLED                            |                                            |
  * | R8   | nothing pending on the transaction                                       | wait                                       |
- * | R9   | Saleor holds exactly this full authorization, nothing charged/refunded/  | wait (not recorded yet), hold              |
- * |      | canceled                                                                 |                                            |
+ * | R9   | Saleor holds exactly this full authorization, nothing charged/refunded/  | wait (not recorded yet; hold               |
+ * |      | canceled                                                                 | authorization-not-recorded after 30 min),  |
+ * |      |                                                                          | hold ledger-mismatch                       |
  * | R10  | no other transaction of the order holds money, no active legacy payment  | hold other-payments                        |
  * | R11  | one 2-decimal currency everywhere                                        | hold currency-mismatch                     |
  * | R12  | verifyPaymentFee on the ORDER lines (productVariantId) is VALID          | hold fee-absent / overcharge-by-fee /      |
@@ -323,6 +337,15 @@ export const decideCapture = (input: DecideCaptureInput): CaptureDecision => {
     isZero(transaction.canceledAmount);
 
   if (nothingRecorded) {
+    const waitedMs = input.authorizationWait
+      ? input.authorizationWait.nowMs - input.authorizationWait.firstCheckedAtMs
+      : 0;
+
+    if (waitedMs >= AUTHORIZATION_RECORD_GRACE_MS) {
+      // A lost or failing Stripe webhook: hold for staff long before the authorization expires.
+      return hold("R9", "authorization-not-recorded", { waitedMs });
+    }
+
     // dess allows unpaid orders: the order can exist before Saleor records the authorization.
     return { outcome: "wait", rule: "R9", reason: "authorization-not-recorded" };
   }

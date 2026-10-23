@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import Stripe from "stripe";
 
 import { createLogger } from "@/lib/logger";
@@ -24,7 +25,7 @@ import {
   CaptureWaitReason,
   decideCapture,
 } from "./decide-capture";
-import { ISaleorCaptureGateway } from "./saleor-capture-gateway";
+import { ISaleorCaptureGateway, SaleorCaptureGatewayTimeoutError } from "./saleor-capture-gateway";
 import { IPaypalCaptureStripeApi, PaypalCaptureLogger } from "./types";
 
 /**
@@ -46,12 +47,19 @@ const FOLLOW_UP_MARGIN_MS = 5_000;
 
 export type CaptureCheckTrigger = "sweep" | "soon" | "follow-up";
 
+type RequestDelivery = boolean | "unknown";
+
 export type CaptureCheckOutcome =
   | { action: "busy" }
   | { action: "captured" }
   | { action: "released"; byApp: boolean }
-  | { action: "charge-requested"; attempt: number; delivered: boolean }
-  | { action: "cancel-requested"; attempt: number; delivered: boolean }
+  /**
+   * delivered: true = Saleor accepted the request; false = Saleor refused it (no effect);
+   * "unknown" = the call timed out, Saleor may have recorded it. Every case is counted and only
+   * the re-read after the settle window decides what comes next.
+   */
+  | { action: "charge-requested"; attempt: number; delivered: RequestDelivery }
+  | { action: "cancel-requested"; attempt: number; delivered: RequestDelivery }
   | { action: "held"; reason: CaptureHoldReason }
   | { action: "waiting"; reason: CaptureWaitReason | "request-settling" | "processing" }
   | { action: "skipped"; reason: CaptureSkipReason | "not-authorized" }
@@ -68,7 +76,8 @@ type CheckArgs = {
   scheduleFollowUp?: (delayMs: number) => void;
 };
 
-type LockedCheckArgs = CheckArgs & { claim: CaptureClaim; nowMs: number };
+/** `lockToken`: this check's claim lock (see checkPaymentIntent). */
+type LockedCheckArgs = CheckArgs & { claim: CaptureClaim; nowMs: number; lockToken: string };
 
 const isHeldWith = (transaction: CaptureTransaction, reason: CaptureHoldReason) =>
   transaction.metadata.some((item) => item.key === CAPTURE_STATE_METADATA_KEY && item.value === CAPTURE_STATE_HELD) &&
@@ -111,12 +120,14 @@ export class PaypalCaptureCoordinator {
   private maxAttempts: number;
   private lockMs: number;
   private logger: PaypalCaptureLogger;
+  /** PaymentIntents being checked by this coordinator (this process). */
+  private inFlight = new Set<string>();
 
   constructor(deps: {
     repo: ICaptureCoordinationRepo;
     transactionRecorder: Pick<TransactionRecorderRepo, "getTransactionByStripePaymentIntentId">;
     gate: Pick<PaymentFeeGateConfig, "ratePercent" | "variantId" | "metadataKey">;
-    /** This process (lease and claim locks). */
+    /** This process: each check locks its claim with `<holderId>#<random>`. */
     holderId: string;
     now?: () => number;
     settleMs?: number;
@@ -135,12 +146,42 @@ export class PaypalCaptureCoordinator {
     this.logger = deps.logger ?? createLogger("PaypalCaptureCoordinator");
   }
 
+  /**
+   * One check at a time per PaymentIntent (review of d462375c, P2):
+   * - in this process, a check of a PaymentIntent already being checked answers busy at once
+   *   (the sweep and a soon check share this coordinator);
+   * - across processes, the DynamoDB claim lock is taken with a token of THIS check
+   *   (`<holderId>#<random>`), and a valid lock refuses every other check, the same process
+   *   included. Before, the lock let the same holder back in, and one process sent two CHARGE
+   *   requests and counted two attempts.
+   */
   async checkPaymentIntent(args: CheckArgs): Promise<CaptureCheckOutcome> {
+    const inFlightKey = `${args.access.saleorApiUrl}#${args.access.appId}#${args.paymentIntentId}`;
+
+    if (this.inFlight.has(inFlightKey)) {
+      this.logger.debug("PayPal capture check: this PaymentIntent is being checked already", {
+        paymentIntentId: args.paymentIntentId,
+        trigger: args.trigger,
+      });
+
+      return { action: "busy" };
+    }
+
+    this.inFlight.add(inFlightKey);
+
+    try {
+      return await this.checkUnderClaimLock(args, `${this.holderId}#${randomUUID()}`);
+    } finally {
+      this.inFlight.delete(inFlightKey);
+    }
+  }
+
+  private async checkUnderClaimLock(args: CheckArgs, lockToken: string): Promise<CaptureCheckOutcome> {
     const nowMs = this.now();
     const lock = await this.repo.lockClaim({
       access: args.access,
       paymentIntentId: args.paymentIntentId,
-      holderId: this.holderId,
+      holderId: lockToken,
       nowMs,
       lockMs: this.lockMs,
     });
@@ -164,12 +205,12 @@ export class PaypalCaptureCoordinator {
     }
 
     try {
-      return await this.checkLocked({ ...args, claim: lock.value, nowMs });
+      return await this.checkLocked({ ...args, claim: lock.value, nowMs, lockToken });
     } finally {
       const unlock = await this.repo.unlockClaim({
         access: args.access,
         paymentIntentId: args.paymentIntentId,
-        holderId: this.holderId,
+        holderId: lockToken,
       });
 
       if (unlock.isErr()) {
@@ -262,7 +303,14 @@ export class PaypalCaptureCoordinator {
       transaction = fetched.value;
     }
 
-    const decision = decideCapture({ paymentIntent, record, transaction, gate: this.gate });
+    const decision = decideCapture({
+      paymentIntent,
+      record,
+      transaction,
+      gate: this.gate,
+      // R9: an authorization Saleor never recorded is held 30 min after the first check.
+      authorizationWait: { firstCheckedAtMs: claim.firstCheckedAtMs ?? nowMs, nowMs },
+    });
     const logAttributes = {
       paymentIntentId,
       transactionId: transaction?.id ?? record?.saleorTransactionId ?? null,
@@ -441,7 +489,7 @@ export class PaypalCaptureCoordinator {
     const recorded = await this.repo.recordRequest({
       access: args.access,
       paymentIntentId: args.paymentIntentId,
-      holderId: this.holderId,
+      holderId: args.lockToken,
       action: request.action,
       nowMs: args.nowMs,
     });
@@ -464,7 +512,24 @@ export class PaypalCaptureCoordinator {
         ? await args.saleor.requestCharge({ transactionId: request.transactionId, amount: request.amount })
         : await args.saleor.requestCancel({ transactionId: request.transactionId });
 
-    if (sent.isErr()) {
+    const delivered: RequestDelivery = sent.isOk()
+      ? true
+      : sent.error instanceof SaleorCaptureGatewayTimeoutError
+        ? "unknown"
+        : false;
+
+    if (delivered === "unknown") {
+      /*
+       * Saleor may have recorded the request and sent the webhook: never repeated blindly. After
+       * the settle window the PaymentIntent is read again (succeeded = captured or released).
+       */
+      this.logger.warn("Saleor did not answer the PayPal capture request in time: outcome unknown", {
+        ...request.logAttributes,
+        action: request.action,
+        attempt,
+        error: sent.isErr() ? sent.error : null,
+      });
+    } else if (sent.isErr()) {
       this.logger.error("Saleor refused the PayPal capture request; it is checked again later", {
         ...request.logAttributes,
         action: request.action,
@@ -487,8 +552,8 @@ export class PaypalCaptureCoordinator {
     args.scheduleFollowUp?.(this.settleMs + FOLLOW_UP_MARGIN_MS);
 
     return request.action === "charge"
-      ? { action: "charge-requested", attempt, delivered: sent.isOk() }
-      : { action: "cancel-requested", attempt, delivered: sent.isOk() };
+      ? { action: "charge-requested", attempt, delivered }
+      : { action: "cancel-requested", attempt, delivered };
   }
 
   private async setState(
@@ -499,7 +564,7 @@ export class PaypalCaptureCoordinator {
     const result = await this.repo.setClaimState({
       access: args.access,
       paymentIntentId: args.paymentIntentId,
-      holderId: this.holderId,
+      holderId: args.lockToken,
       state,
       ...(holdReason === undefined ? {} : { holdReason }),
       nowMs: args.nowMs,

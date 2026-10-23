@@ -59,10 +59,14 @@ type UseCaseExecuteResult = Result<
  *
  * - canceled: CANCEL_SUCCESS (a replay, no Stripe write).
  * - succeeded: CANCEL_FAILURE "already captured: refund instead".
- * - processing: HTTP 503, no Stripe write (Saleor re-sends the request).
+ * - processing: HTTP 503, no Stripe write.
  * - otherwise: cancel with idempotency key cancel:v1:<pi>:<status>, one attempt; Stripe decides
  *   (see createStripeCancelIdempotencyKey for why the status is in the key).
- * - A Stripe outcome the app did not get: HTTP 503, Saleor re-sends the request.
+ * - A Stripe outcome the app did not get: HTTP 503.
+ * Saleor 3.22.74 re-sends a 503 with an EMPTY body, which cannot be processed (see
+ * ChargeOutcomeUnknownResponse): nobody retries the cancel for the app. The Stripe webhook
+ * (payment_intent.canceled) records a cancel that happened; the A3d capture worker re-reads the
+ * PaymentIntent and requests again.
  * - Every CANCEL_FAILURE has a pspReference of its own (createCancelFailurePspReference).
  */
 export class TransactionCancelationRequestedUseCase {

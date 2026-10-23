@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  AUTHORIZATION_RECORD_GRACE_MS,
+  CAPTURE_HOLD_REASONS,
   CaptureDecision,
   CaptureOrder,
   CaptureOrderLine,
@@ -334,6 +336,58 @@ describe("decideCapture (A3d)", () => {
         outcome: "wait",
         rule: "R9",
         reason: "authorization-not-recorded",
+      });
+    });
+
+    describe("never recorded (review P2): a wait longer than 30 min is held", () => {
+      const FIRST_CHECK = Date.parse("2026-10-23T10:00:00.000Z");
+      const unrecorded = () => transaction({ authorizedAmount: eur(0) });
+      const decideAt = (elapsedMs: number) =>
+        decideCapture({
+          paymentIntent: paymentIntent(),
+          record: record(),
+          transaction: unrecorded(),
+          gate: GATE,
+          authorizationWait: { firstCheckedAtMs: FIRST_CHECK, nowMs: FIRST_CHECK + elapsedMs },
+        });
+
+      it("is 30 min", () => {
+        expect(AUTHORIZATION_RECORD_GRACE_MS).toBe(30 * 60_000);
+      });
+
+      it("still waits just before 30 min", () => {
+        expect(decideAt(AUTHORIZATION_RECORD_GRACE_MS - 1)).toStrictEqual({
+          outcome: "wait",
+          rule: "R9",
+          reason: "authorization-not-recorded",
+        });
+      });
+
+      it.each([AUTHORIZATION_RECORD_GRACE_MS, 2 * AUTHORIZATION_RECORD_GRACE_MS])(
+        "holds after %i ms",
+        (elapsedMs) => {
+          expect(decideAt(elapsedMs)).toMatchObject({
+            outcome: "hold",
+            rule: "R9",
+            reason: "authorization-not-recorded",
+          });
+        },
+      );
+
+      it("only for a transaction with nothing recorded: a recorded one is unaffected", () => {
+        expect(
+          decideCapture({
+            paymentIntent: paymentIntent(),
+            record: record(),
+            transaction: transaction(),
+            gate: GATE,
+            authorizationWait: { firstCheckedAtMs: FIRST_CHECK, nowMs: FIRST_CHECK + 3 * AUTHORIZATION_RECORD_GRACE_MS },
+          }),
+        ).toStrictEqual(CAPTURE);
+      });
+
+      it("is a hold reason the tag may carry", () => {
+        expect(CAPTURE_HOLD_REASONS).toContain("authorization-not-recorded");
       });
     });
 

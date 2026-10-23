@@ -89,6 +89,7 @@ describe("DynamoDBCaptureCoordinationRepo", () => {
           chargeAttempts: 2,
           cancelAttempts: 0,
           lastRequestAt: NOW - 100_000,
+          firstCheckedAt: NOW - 600_000,
           holdReason: null,
         },
       });
@@ -107,15 +108,21 @@ describe("DynamoDBCaptureCoordinationRepo", () => {
         chargeAttempts: 2,
         cancelAttempts: 0,
         lastRequestAtMs: NOW - 100_000,
+        firstCheckedAtMs: NOW - 600_000,
         holdReason: null,
       });
+      /*
+       * Review P2 (re-entrancy): no `OR lockHolder = :me`. A valid lock refuses every other
+       * check, also one of the same process; each check locks with a token of its own.
+       * firstCheckedAt is kept from the first lock: R9 counts the 30 min from it.
+       */
       expect(lastUpdate()).toStrictEqual({
         TableName: TABLE,
         Key: claimKey,
         UpdateExpression:
-          "SET lockHolder = :me, lockExpiresAt = :lockExpiresAt, paymentIntentId = :pi, updatedAt = :now, claimState = if_not_exists(claimState, :open), chargeAttempts = if_not_exists(chargeAttempts, :zero), cancelAttempts = if_not_exists(cancelAttempts, :zero)",
+          "SET lockHolder = :me, lockExpiresAt = :lockExpiresAt, paymentIntentId = :pi, updatedAt = :now, claimState = if_not_exists(claimState, :open), chargeAttempts = if_not_exists(chargeAttempts, :zero), cancelAttempts = if_not_exists(cancelAttempts, :zero), firstCheckedAt = if_not_exists(firstCheckedAt, :now)",
         ConditionExpression:
-          "attribute_not_exists(PK) OR attribute_not_exists(lockHolder) OR lockExpiresAt < :now OR lockHolder = :me",
+          "attribute_not_exists(PK) OR attribute_not_exists(lockHolder) OR lockExpiresAt < :now",
         ExpressionAttributeValues: {
           ":me": "me",
           ":lockExpiresAt": NOW + 60_000,

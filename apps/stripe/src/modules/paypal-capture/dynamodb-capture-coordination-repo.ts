@@ -48,6 +48,7 @@ const toClaim = (
     chargeAttempts: count(attributes.chargeAttempts),
     cancelAttempts: count(attributes.cancelAttempts),
     lastRequestAtMs: typeof attributes.lastRequestAt === "number" ? attributes.lastRequestAt : null,
+    firstCheckedAtMs: typeof attributes.firstCheckedAt === "number" ? attributes.firstCheckedAt : null,
     holdReason: typeof attributes.holdReason === "string" ? attributes.holdReason : null,
   });
 };
@@ -104,9 +105,13 @@ export class DynamoDBCaptureCoordinationRepo implements ICaptureCoordinationRepo
           TableName: this.tableName,
           Key: claimKey(args.access, args.paymentIntentId),
           UpdateExpression:
-            "SET lockHolder = :me, lockExpiresAt = :lockExpiresAt, paymentIntentId = :pi, updatedAt = :now, claimState = if_not_exists(claimState, :open), chargeAttempts = if_not_exists(chargeAttempts, :zero), cancelAttempts = if_not_exists(cancelAttempts, :zero)",
+            "SET lockHolder = :me, lockExpiresAt = :lockExpiresAt, paymentIntentId = :pi, updatedAt = :now, claimState = if_not_exists(claimState, :open), chargeAttempts = if_not_exists(chargeAttempts, :zero), cancelAttempts = if_not_exists(cancelAttempts, :zero), firstCheckedAt = if_not_exists(firstCheckedAt, :now)",
+          /*
+           * Review P2: no 'OR lockHolder = :me'. Each check locks with a token of its own, and a
+           * valid lock refuses every other check, also one of the same process.
+           */
           ConditionExpression:
-            "attribute_not_exists(PK) OR attribute_not_exists(lockHolder) OR lockExpiresAt < :now OR lockHolder = :me",
+            "attribute_not_exists(PK) OR attribute_not_exists(lockHolder) OR lockExpiresAt < :now",
           ExpressionAttributeValues: {
             ":me": args.holderId,
             ":lockExpiresAt": args.nowMs + args.lockMs,

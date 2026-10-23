@@ -2,7 +2,12 @@ import { err, ok, Result } from "neverthrow";
 import Stripe from "stripe";
 
 import { CaptureHoldReason, CaptureTransaction } from "@/modules/paypal-capture/decide-capture";
-import { ISaleorCaptureGateway, SaleorCaptureGatewayError } from "@/modules/paypal-capture/saleor-capture-gateway";
+import {
+  ISaleorCaptureGateway,
+  SaleorCaptureGatewayError,
+  SaleorCaptureGatewayFailure,
+  SaleorCaptureGatewayTimeoutError,
+} from "@/modules/paypal-capture/saleor-capture-gateway";
 import { createResolvedTransactionFlow } from "@/modules/resolved-transaction-flow";
 import { createSaleorTransactionFlow } from "@/modules/saleor/saleor-transaction-flow";
 import { createSaleorTransactionId } from "@/modules/saleor/saleor-transaction-id";
@@ -143,6 +148,8 @@ export class FakeCaptureSaleor implements ISaleorCaptureGateway {
   transaction: CaptureTransaction | null;
   fetchFails = false;
   requestFails = false;
+  /** The request reached Saleor (its effect happens) but the answer timed out: outcome unknown. */
+  requestTimesOut = false;
   tagFails = false;
   requests: Array<{ action: "CHARGE" | "CANCEL"; transactionId: string; amount?: number }> = [];
   tags: Array<{ transactionId: string; reason: CaptureHoldReason; checkedAt: string }> = [];
@@ -153,7 +160,7 @@ export class FakeCaptureSaleor implements ISaleorCaptureGateway {
     this.transaction = transaction;
   }
 
-  async fetchTransaction(): Promise<Result<CaptureTransaction | null, InstanceType<typeof SaleorCaptureGatewayError>>> {
+  async fetchTransaction(): Promise<Result<CaptureTransaction | null, SaleorCaptureGatewayFailure>> {
     if (this.fetchFails) {
       return err(new SaleorCaptureGatewayError("Saleor unavailable"));
     }
@@ -161,7 +168,7 @@ export class FakeCaptureSaleor implements ISaleorCaptureGateway {
     return ok(this.transaction);
   }
 
-  async requestCharge(args: { transactionId: string; amount: number }) {
+  async requestCharge(args: { transactionId: string; amount: number }): Promise<Result<void, SaleorCaptureGatewayFailure>> {
     this.requests.push({ action: "CHARGE", ...args });
 
     if (this.requestFails) {
@@ -170,10 +177,14 @@ export class FakeCaptureSaleor implements ISaleorCaptureGateway {
 
     this.onCharge();
 
+    if (this.requestTimesOut) {
+      return err(new SaleorCaptureGatewayTimeoutError("transactionRequestAction timed out"));
+    }
+
     return ok(undefined);
   }
 
-  async requestCancel(args: { transactionId: string }) {
+  async requestCancel(args: { transactionId: string }): Promise<Result<void, SaleorCaptureGatewayFailure>> {
     this.requests.push({ action: "CANCEL", ...args });
 
     if (this.requestFails) {
@@ -181,6 +192,10 @@ export class FakeCaptureSaleor implements ISaleorCaptureGateway {
     }
 
     this.onCancel();
+
+    if (this.requestTimesOut) {
+      return err(new SaleorCaptureGatewayTimeoutError("transactionRequestAction timed out"));
+    }
 
     return ok(undefined);
   }

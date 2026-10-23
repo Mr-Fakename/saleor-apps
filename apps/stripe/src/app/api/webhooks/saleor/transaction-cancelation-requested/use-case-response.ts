@@ -122,10 +122,11 @@ class Failure extends SuccessWebhookResponse {
 }
 
 /**
- * Stripe gave no answer that says whether it cancelled (isStripeOutcomeUnknown). HTTP 503: Saleor
- * re-sends the same stored delivery (see ChargeOutcomeUnknownResponse for the Saleor 3.22.74
- * retry rule), and the retry reads the PaymentIntent again: a cancel that happened is then
- * replayed as CANCEL_SUCCESS.
+ * Stripe gave no answer that says whether it cancelled (isStripeOutcomeUnknown). HTTP 503 keeps a
+ * false CANCEL_FAILURE out of the ledger. Saleor 3.22.74 re-sends it with an EMPTY body, which
+ * cannot be processed (see ChargeOutcomeUnknownResponse): the request ends as Saleor's own
+ * failure, which moves no amount. A cancel that did happen is recorded by the Stripe webhook
+ * (payment_intent.canceled).
  */
 export class CancelOutcomeUnknownResponse extends ErrorWebhookResponse {
   readonly statusCode = 503;

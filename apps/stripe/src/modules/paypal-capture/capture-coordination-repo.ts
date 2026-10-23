@@ -38,6 +38,11 @@ export type CaptureClaim = {
   readonly cancelAttempts: number;
   /** When the last request was made (epoch ms), or null. */
   readonly lastRequestAtMs: number | null;
+  /**
+   * When a check first locked this claim (epoch ms): checks run only for authorized
+   * PaymentIntents, so this is the start of the R9 "authorization not recorded" wait.
+   */
+  readonly firstCheckedAtMs: number | null;
   readonly holdReason: string | null;
 };
 
@@ -64,7 +69,9 @@ export interface ICaptureCoordinationRepo {
 
   /**
    * Locks the PaymentIntent's claim for one check (creating it when new) and returns it, or
-   * null while another holder's lock is valid.
+   * null while a valid lock exists. `holderId` is the lock token of ONE check (process id + a
+   * random value): a valid lock refuses every other check, also one of the same process
+   * (review P2: no re-entry).
    */
   lockClaim(args: {
     access: CaptureCoordinationAccess;

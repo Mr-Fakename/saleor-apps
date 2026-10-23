@@ -66,7 +66,10 @@ type UseCaseExecuteResult = Result<
  * - canceled: CHARGE_FAILURE "authorization released or expired", actions CANCEL.
  * - requires_capture: capture min(requested, amount_capturable), idempotency key
  *   capture:v1:<pi>:<amount>, one attempt.
- * - processing, or a Stripe outcome the app did not get: HTTP 503, Saleor re-sends the request.
+ * - processing, or a Stripe outcome the app did not get: HTTP 503 (ChargeOutcomeUnknownResponse).
+ *   Saleor 3.22.74 re-sends it with an EMPTY body, which cannot be processed: nobody retries the
+ *   capture for the app. The Stripe webhook records a capture that happened; the A3d capture
+ *   worker re-reads the PaymentIntent and requests again (PaypalCaptureCoordinator).
  * - Every CHARGE_FAILURE has a pspReference of its own (createChargeFailurePspReference).
  */
 export class TransactionChargeRequestedUseCase {

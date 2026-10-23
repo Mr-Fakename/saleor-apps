@@ -15,8 +15,10 @@ import { CreatePaymentIntentArgs, IStripePaymentIntentsApi, UpdatePaymentIntentA
  *
  * One handler call makes one live read and at most one write, each in one attempt (the refund
  * pattern, StripeRefundsApi): an unknown outcome goes straight back to the use case, which
- * answers HTTP 503, and Saleor re-sends the request (handle_transaction_request_task), which
- * reads the PaymentIntent again and reuses the write's idempotency key. stripe-node still retries
+ * answers HTTP 503. Saleor 3.22.74 re-sends that request with an EMPTY body (see
+ * ChargeOutcomeUnknownResponse), so it is never processed again: a later request (staff, or the
+ * A3d capture worker after re-reading the PaymentIntent) reads the PaymentIntent again and, for
+ * the same amount, reuses the write's idempotency key. stripe-node still retries
  * once, 0.5 s later, when the connection was closed on the first attempt
  * (RequestSender._shouldRetry): worst case (2 x 2.5 s + 0.5 s) + (2 x 5 s + 0.5 s) = 16 s.
  */

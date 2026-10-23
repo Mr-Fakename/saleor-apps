@@ -123,13 +123,17 @@ class Failure extends SuccessWebhookResponse {
  * PaymentIntent is still processing. A CHARGE_FAILURE would tell staff the capture failed while
  * it may have happened.
  *
- * HTTP 503 instead: Saleor 3.22.74 re-sends the same stored delivery when the app answers >= 500
- * (webhook/transport/synchronous/transport.py handle_transaction_request_task, retry_backoff 10,
- * max_retries 5: 10/20/40/80/160 s; webhook/transport/utils.py handle_webhook_retry). The retry
- * reads the PaymentIntent again: a capture that happened is then replayed as CHARGE_SUCCESS.
- * After the last retry Saleor records its own CHARGE_FAILURE ("Failed to delivery request.",
- * include_in_calculations=False: it moves no amount), and the Stripe webhook still reports the
- * capture if there was one.
+ * HTTP 503 instead. Saleor 3.22.74 does re-send a delivery the app answered >= 500
+ * (webhook/transport/synchronous/transport.py handle_transaction_request_task,
+ * webhook/transport/utils.py handle_webhook_retry), but with an EMPTY body: a failed attempt
+ * calls EventPayload.save_as_file(), which writes the empty in-database payload over the stored
+ * file (saleor/core/models.py:199-203, webhook/transport/utils.py:651-658; verified
+ * 2026-10-23). The retry cannot be processed, so the request ends about 10 s later as Saleor's
+ * own CHARGE_FAILURE ("Failed to delivery request.", include_in_calculations=False: it moves no
+ * amount). Nothing is captured again by Saleor; the 503 only keeps a false app CHARGE_FAILURE out
+ * of the ledger. A capture that did happen is recorded by the Stripe webhook
+ * (payment_intent.succeeded), and the A3d capture worker re-reads the PaymentIntent and requests
+ * again (PaypalCaptureCoordinator).
  */
 export class ChargeOutcomeUnknownResponse extends ErrorWebhookResponse {
   readonly statusCode = 503;

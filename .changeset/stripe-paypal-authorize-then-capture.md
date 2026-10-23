@@ -30,5 +30,10 @@ kill switch, any other value stops the app at boot):
 - A capture or release request that has no effect at Stripe (Saleor re-sends such requests with an
   empty body) is checked again after 90 s and repeated, at most 3 times, then held
   (`capture-stuck` / `release-stuck`).
+- An authorization that Saleor has still not recorded 30 minutes after the first check (for
+  example, a lost Stripe webhook) is held as well (`authorization-not-recorded`), instead of
+  waiting until it expires.
+- Every Saleor call of the worker times out after 15 seconds. A capture request that times out is
+  treated as "maybe sent": it is never repeated before the PaymentIntent is read again.
 - One sweeper at a time (DynamoDB lease) and one check per PaymentIntent at a time (DynamoDB
   claim), in the app's existing table.
